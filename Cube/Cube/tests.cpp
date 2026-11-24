@@ -89,10 +89,27 @@ void aimAt(glm::vec3 p) {
 void shotScript(int frame, int w, int h) {
     auto shot = [&](int n) { saveScreenshot(w, h, "shot_" + std::to_string(n) + ".ppm"); };
     auto pv = [](glm::vec3 p) { return std::to_string((int)p.x) + "," + std::to_string((int)p.y) + "," + std::to_string((int)p.z); };
-    static int phase = 0, t0 = 0, rideCell = -1;
+    static int phase = 0, t0 = 0, rideCell = -1, pickupShotFrame = -1;
     static glm::vec3 portalDir(0.0f);
     // 방 클리어 → 증강 후보 3개(서로 다르고, 가질 수 있는 단계만)를 확인하고 첫 번째를 고른다. 바로 Tab 화면도 한 장
     static int tabShotFrame = -1;
+    // 방 클리어 → 바닥에 증강 물체. 멀리서 F 는 안 되고, 가까이 가서 F 로 카드가 열린다
+    static bool interacted = false;
+    if (augPickupActive && !augPicking && !interacted && currentCell != HUB_CELL) {
+        interacted = true;
+        glm::vec3 p = augPickupPos;
+        player.pos = p + glm::vec3(10.0f, 0, 0);
+        tryInteract();
+        bool farBlocked = !augPicking;
+        player.pos = p + glm::vec3(2.0f, 0, 0);
+        player.vel = glm::vec3(0.0f);
+        aimAt(p + glm::vec3(0, 1.6f, 0));
+        bool nearOk = nearAugmentPickup() && glm::length(glm::vec2(p.x, p.z)) > 6.0f;   // 바닥 포털 자리는 피해야 한다
+        std::cout << "[test] augment pickup at " << pv(p) << " free " << spotIsFree(p, 1.0f) << " far F blocked " << farBlocked
+                  << " near " << nearOk << ((farBlocked && nearOk && spotIsFree(p, 1.0f)) ? "" : " FAIL") << "\n";
+        pickupShotFrame = frame + 2;
+    }
+    if (frame == pickupShotFrame) { shot(32); tryInteract(); }
     if (frame == tabShotFrame) openCubeView();
     if (frame == tabShotFrame + 1) { shot(31); closeCubeView(); }
     if (augPicking) {

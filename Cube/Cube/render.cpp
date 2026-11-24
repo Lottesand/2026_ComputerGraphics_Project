@@ -252,6 +252,25 @@ void drawPortals(bool films) {
     }
 }
 
+// 방을 깨면 나오는 증강 물체: 받침대 + 떠서 도는 금빛 결정 + 주위를 도는 작은 조각 4개
+void drawAugmentPickup() {
+    if (!augPickupActive) return;
+    glm::vec3 p = augPickupPos;
+    Material base{ glm::vec3(0.16f, 0.17f, 0.2f), 0.5f, 32.0f, 0.0f, 0 };
+    Material gold{ glm::vec3(1.0f, 0.78f, 0.3f), 0.0f, 1.0f, 3.5f + 1.0f * sinf(globalTime * 4.0f), 0 };
+    Material trim{ glm::vec3(1.0f, 0.78f, 0.3f), 0.0f, 1.0f, 2.0f, 0 };
+    drawPart(TRS(p + glm::vec3(0, 0.4f, 0), glm::vec3(1.3f, 0.8f, 1.3f)), base);
+    drawPart(TRS(p + glm::vec3(0, 0.82f, 0), glm::vec3(1.34f, 0.05f, 1.34f)), trim);
+    glm::vec3 c = p + glm::vec3(0, 1.75f + 0.15f * sinf(globalTime * 2.0f), 0);
+    glm::mat4 M = glm::translate(glm::mat4(1.0f), c) * glm::rotate(glm::mat4(1.0f), globalTime * 1.6f, glm::vec3(0, 1, 0)) *
+                  glm::rotate(glm::mat4(1.0f), 0.785f, glm::vec3(1, 0, 1));
+    drawPart(M * glm::scale(glm::mat4(1.0f), glm::vec3(0.55f)), gold);
+    for (int k = 0; k < 4; ++k) {
+        float a = globalTime * 2.4f + k * PI * 0.5f;
+        drawPart(TRS(c + glm::vec3(cosf(a) * 0.95f, 0.25f * sinf(a * 2.0f), sinf(a) * 0.95f), glm::vec3(0.12f)), trim);
+    }
+}
+
 void drawWorld(bool withEffects) {
     for (const auto& b : boxes) {
         if (shadowPass && b.mat.emissive > 0.0f) continue;
@@ -267,6 +286,7 @@ void drawWorld(bool withEffects) {
     for (const auto& d : localDecor) drawPart(W * d.model, d.mat);
     drawTrains();
     drawHoles();
+    drawAugmentPickup();
     if (!shadowPass) drawPortals(false);
     if (withEffects && grap.active) {
         glm::vec3 eye = eyePosition(), fwd = forwardDir();
@@ -313,6 +333,7 @@ void uploadLights(glm::vec3 eye) {
         for (int i = 0; i < tracks[k].cars; ++i)
             if (carVisible(tracks[k], carS(tracks[k], i)))
                 cand.push_back({ glm::vec3(carWorld(k, i)[3]), glm::vec3(1.0f, 0.72f, 0.42f) * 1.6f, 10.0f });
+    if (augPickupActive) cand.push_back({ augPickupPos + glm::vec3(0, 1.8f, 0), glm::vec3(1.0f, 0.78f, 0.35f) * 3.0f, 9.0f });
     int n = std::min((int)cand.size(), MAX_LIGHTS);
     std::partial_sort(cand.begin(), cand.begin() + n, cand.end(), [&](const LightSrc& a, const LightSrc& b) {
         return glm::length(a.pos - eye) - a.range < glm::length(b.pos - eye) - b.range;

@@ -142,6 +142,8 @@ void renderHUD(int w, int h) {
     }
     drawText(b, 16 * ui, h - 48 * ui, 1.4f * ui, "TAB CUBE", glm::vec4(1, 1, 1, 0.6f));
     if (rotAnimActive) drawTextCentered(b, cx, h * 0.68f, 3.0f * ui, "WORLD ROTATING", glm::vec4(1.0f, 0.85f, 0.2f, 1.0f));
+    if (nearAugmentPickup() && !augPicking)
+        drawTextCentered(b, cx, h * 0.38f, 2.4f * ui, "[F] CHOOSE AUGMENT", glm::vec4(1.0f, 0.82f, 0.35f, 1.0f));
     if (augPicking) drawAugmentPicker(b, w, h);
 
     flushHUD(b, w, h);

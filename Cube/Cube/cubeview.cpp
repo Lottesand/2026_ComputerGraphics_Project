@@ -193,6 +193,7 @@ void applyCubeToWorld() {
     if (r == glm::mat3(1.0f)) return;
     worldOrient = target;
     rebuildWorld();
+    placeAugmentPickup();   // 방이 돌면 바닥이 바뀌므로 증강 물체도 새 바닥의 빈 자리로
 
     auto rot = [&](glm::vec3 p) { return ROOM_C + r * (p - ROOM_C); };
     // 눈 위치를 기준으로 옮겨서 회전 연출이 끊기지 않게 한다

@@ -171,6 +171,7 @@ void travelTo(int id, glm::vec3 D, bool viaTrain) {
     }
     player.onGround = false;
     portalArmed = false;
+    placeAugmentPickup();
     bannerText = (id == HUB_CELL ? std::string("HUB") : "ROOM " + std::to_string(id)) + " - " + styleName(styleForCell(id));
     bannerT = 2.5f;
 }
@@ -625,7 +626,8 @@ void update(float realDt) {
             bannerText = "ROOM CLEAR - PORTALS OPEN";
             bannerT = 3.0f;
             player.hp = std::min(stats.maxHp, player.hp + stats.clearHeal);
-            startAugmentPick();
+            bannerText = "ROOM CLEAR - TAKE THE AUGMENT [F]";
+            placeAugmentPickup();
         } else {
             waveTimer -= realDt;
             if (waveTimer <= 0.0f) {

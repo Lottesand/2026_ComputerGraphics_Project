@@ -26,6 +26,7 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     }
     if (key == GLFW_KEY_ESCAPE) glfwSetWindowShouldClose(window, true);
     else if (key == GLFW_KEY_R) restartRun();
+    else if (key == GLFW_KEY_F) tryInteract();
     else if (key == GLFW_KEY_TAB && !rotAnimActive) openCubeView();
 }
 

@@ -5,6 +5,9 @@ Stats stats;
 std::vector<Augment> augments;      // 단계별로 펼친 전체 목록 (같은 계열은 I, II, III ... 순서)
 std::vector<int> ownedAugments;     // 고른 순서
 bool augPicking = false;
+bool augPickupActive = false;       // 방을 깨면 나오는 증강 물체가 지금 방에 있는지
+glm::vec3 augPickupPos(0.0f);
+static bool augTaken[27];           // 그 방(칸)의 증강을 이미 받았는지. 방을 나갔다 와도 안 받았으면 다시 나온다
 int augOffer[3] = { -1, -1, -1 }, augOfferCount = 0;
 static std::vector<bool> augOffered;    // 한 번이라도 후보로 나왔는지 (안 나온 것부터 보여준다)
 
@@ -52,6 +55,37 @@ void resetAugments() {
     augOffered.assign(augments.size(), false);
     augPicking = false;
     augOfferCount = 0;
+    augPickupActive = false;
+    for (bool& t : augTaken) t = false;
+}
+
+// 깬 방에서 아직 증강을 안 받았으면 바닥의 빈 자리에 증강 물체를 놓는다.
+// 바닥 가운데는 아래층으로 가는 포털 자리라 반지름 8 부터 바깥으로 찾는다
+void placeAugmentPickup() {
+    augPickupActive = currentCell != HUB_CELL && roomCleared[currentCell] && !augTaken[currentCell];
+    if (!augPickupActive) return;
+    augPickupPos = glm::vec3(8.0f, 0.0f, 0.0f);
+    for (int ring = 0; ring < 7; ++ring) {
+        bool found = false;
+        for (int k = 0; k < 8 && !found; ++k) {
+            float ang = k * PI * 0.25f + ring * 0.4f, rad = 8.0f + ring * 2.5f;
+            glm::vec3 p(cosf(ang) * rad, 0.0f, sinf(ang) * rad);
+            if (spotIsFree(p, 1.0f)) { augPickupPos = p; found = true; }
+        }
+        if (found) break;
+    }
+    augPickupPos.y = groundHeightAt(augPickupPos, 0.6f);
+}
+
+bool nearAugmentPickup() {
+    return augPickupActive && !player.dead && glm::length(player.pos + glm::vec3(0, 0.9f, 0) - (augPickupPos + glm::vec3(0, 1.2f, 0))) < 3.2f;
+}
+
+// F: 증강 물체 가까이에서 누르면 카드 3장을 연다
+void tryInteract() {
+    if (!nearAugmentPickup()) return;
+    startAugmentPick();
+    if (!augPicking) { augTaken[currentCell] = true; augPickupActive = false; }   // 더 고를 게 없음
 }
 
 int augLineTier(int line) {
@@ -90,6 +124,8 @@ void chooseAugment(int k) {
     player.hp = std::min(stats.maxHp, player.hp + std::max(0, stats.maxHp - oldMax));
     ownedAugments.push_back(id);
     augPicking = false;
+    augTaken[currentCell] = true;
+    augPickupActive = false;
     bannerText = "AUGMENT - " + augments[id].name;
     bannerT = 2.5f;
     glfwSetInputMode(gWindow, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
