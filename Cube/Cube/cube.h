@@ -127,6 +127,7 @@ struct Player {
     bool onGround, dead;
     int hp;
     float fireCd, recoil, bobPhase, hurtT, landDip, deadT, muzzleT;
+    float camRoll, camFov;      // 웹스윙 1인칭 연출: 화면 기울기(라디안), 추가 시야각(도)
 };
 
 
@@ -462,6 +463,7 @@ void resetGame();
 glm::mat4 carWorld(int k, int i);
 bool castGrapple(glm::vec3 o, glm::vec3 d, Grapple& out);
 void releaseGrapple();
+void ropeDash();
 void tryGrapple();
 bool portalsOn();
 int portalTarget(glm::vec3 D);

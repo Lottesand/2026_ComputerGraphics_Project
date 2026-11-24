@@ -95,6 +95,14 @@ bool castGrapple(glm::vec3 o, glm::vec3 d, Grapple& out) {
 
 void releaseGrapple() { grap = Grapple{}; }
 
+// 줄을 끊고 바라보는 방향으로 대쉬 (지금 그 방향 속도가 더 빠르면 유지)
+void ropeDash() {
+    glm::vec3 fwd = forwardDir();
+    releaseGrapple();
+    player.vel = fwd * std::max(20.0f, glm::dot(player.vel, fwd));
+    player.onGround = false;
+}
+
 void tryGrapple() {
     Grapple g;
     if (!castGrapple(eyePosition(), forwardDir(), g)) return;
@@ -322,6 +330,22 @@ void updatePlayer(float dt) {
     player.muzzleT -= dt;
     if (player.dead) { player.deadT += dt; return; }
 
+    // 1인칭 스윙 연출: 빠를수록 시야각이 넓어지고, 줄에 매달리면 줄 쪽으로 화면이 기운다
+    {
+        float spd = glm::length(player.vel);
+        glm::vec3 rightH(cosf(player.yaw), 0, sinf(player.yaw));
+        float roll = 0.0f;
+        if (grap.active && !grap.onTrain) {
+            glm::vec3 toA = grap.anchor - eyePosition();
+            toA.y = 0.0f;
+            if (glm::length(toA) > 0.5f) roll = glm::dot(glm::normalize(toA), rightH) * 0.22f * std::min(1.0f, spd / 15.0f);
+        }
+        float fovAdd = player.onGround ? 0.0f : glm::clamp((spd - 8.0f) * 0.7f, 0.0f, 18.0f);
+        float k = std::min(1.0f, 5.0f * dt);
+        player.camRoll += (roll - player.camRoll) * k;
+        player.camFov += (fovAdd - player.camFov) * k;
+    }
+
     glm::vec3 f(sinf(player.yaw), 0, -cosf(player.yaw)), r(cosf(player.yaw), 0, sinf(player.yaw));
     glm::vec3 wish(0.0f);
     if (glfwGetKey(gWindow, GLFW_KEY_W) == GLFW_PRESS) wish += f;
@@ -334,8 +358,18 @@ void updatePlayer(float dt) {
     // 우클릭을 누르는 순간 줄을 쏘고, 떼면 놓는다
     bool hold = glfwGetMouseButton(gWindow, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS || testGrapple;
     if (hold && !grappleWasDown) tryGrapple();
-    if (!hold && grap.active) releaseGrapple();
+    if (!hold && grap.active) {
+        // 스윙 중에 놓으면 진행 방향 + 위로 살짝 튕겨 나간다 (다음 줄을 걸 시간을 번다)
+        if (!grap.onTrain && glm::length(player.vel) > 8.0f)
+            player.vel += glm::normalize(player.vel) * 3.0f + glm::vec3(0, 5.0f, 0);
+        releaseGrapple();
+    }
     grappleWasDown = hold;
+    // 줄에 매달린 상태에서 Space를 누르는 순간 대쉬
+    static bool spaceWasDown = false;
+    bool space = glfwGetKey(gWindow, GLFW_KEY_SPACE) == GLFW_PRESS;
+    if (space && !spaceWasDown && grap.active) ropeDash();
+    spaceWasDown = space;
     if (grap.active && grap.onTrain) {
         updateTrainRide(dt);
         return;
@@ -362,8 +396,7 @@ void updatePlayer(float dt) {
 
     player.pos += player.vel * dt;
     if (grap.active) {
-        // 줄 제약: 손과 고정점 거리가 줄 길이를 넘지 못한다. 줄을 감으면서 진자처럼 흔들린다
-        grap.len = std::max(2.5f, grap.len - 9.0f * dt);
+        // 줄 제약: 손과 고정점 거리가 줄 길이를 넘지 못한다. 줄 길이는 건 순간 그대로, 진자처럼 흔들린다
         glm::vec3 d = player.pos + glm::vec3(0, 1.5f, 0) - grap.anchor;
         float L = glm::length(d);
         if (L > grap.len) {
@@ -371,7 +404,19 @@ void updatePlayer(float dt) {
             player.pos -= n * (L - grap.len);
             float vr = glm::dot(player.vel, n);
             if (vr > 0.0f) player.vel -= n * vr;
+            // 줄이 팽팽할 때: 중력을 더 걸어 묵직하게 떨어지고, 아래쪽 호에서 진행 방향으로 가속해 스윙이 죽지 않는다
+            player.vel.y -= 10.0f * dt;
+            glm::vec3 vt = player.vel - n * glm::dot(player.vel, n);
+            float vtl = glm::length(vt);
+            if (vtl > 1.0f && vtl < 28.0f) player.vel += vt / vtl * (10.0f * std::max(0.0f, -n.y) * dt);
         }
+        // 호 아래쪽에서 바닥에 닿기 직전일 때만 줄을 조금씩 짧게 해 발이 바닥 위로 지나가게 한다.
+        // 한 번에 줄이면 먼 타점에 걸었을 때 앞으로 순간이동하므로 초당 12 까지만
+        float ground = groundHeightAt(player.pos, PLAYER_R * 0.7f);
+        float maxLen = grap.anchor.y - 1.5f - ground - 0.8f;
+        glm::vec3 da = player.pos + glm::vec3(0, 1.5f, 0) - grap.anchor;
+        bool nearBottom = da.y < -0.7f * glm::length(da) && player.pos.y - ground < 2.0f;
+        if (nearBottom && maxLen > 2.5f && grap.len > maxLen) grap.len = std::max(maxLen, grap.len - 12.0f * dt);
     }
     for (const auto& b : boxes) {
         if (!b.solid) continue;

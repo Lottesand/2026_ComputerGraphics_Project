@@ -389,6 +389,10 @@ void renderFrame(int w, int h) {
 
     glm::vec3 eye = eyePosition(), fwd = forwardDir();
     glm::vec3 up(0, 1, 0);
+    if (!player.dead && fabsf(player.camRoll) > 1e-4f) {
+        glm::vec3 rightH(cosf(player.yaw), 0, sinf(player.yaw));
+        up = glm::normalize(up * cosf(player.camRoll) + rightH * sinf(player.camRoll));
+    }
     if (player.dead) {
         float roll = std::min(1.0f, player.deadT) * 0.5f;
         glm::vec3 right = glm::normalize(glm::cross(fwd, up));
@@ -404,7 +408,7 @@ void renderFrame(int w, int h) {
     glm::vec3 skyEye = glm::vec3(rollA * glm::vec4(eye, 1.0f));
     glm::mat4 skyView = glm::lookAt(skyEye, skyEye + fwd, up);
     glm::mat4 view = skyView * rollA;
-    float fov = 75.0f - (1.0f - timeScale) * 6.0f;
+    float fov = 75.0f - (1.0f - timeScale) * 6.0f + player.camFov;
     glm::mat4 proj = glm::perspective(glm::radians(fov), (float)w / (float)h, 0.03f, FAR_PLANE);
 
     // 해는 큐브 공간에 고정 → 방이 돌면 빛이 들어오는 방향도 달라진다

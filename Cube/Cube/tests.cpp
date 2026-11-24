@@ -190,6 +190,8 @@ void shotScript(int frame, int w, int h) {
                   << " target " << portalTarget(portalDir) << "\n";
         shot(3);
     }
+    // 줄 길이가 고정이라 포털까지 당겨지지 않는다 → 줄에 매달린 채 포털 쪽으로 대쉬
+    if (phase == 1 && frame == t0 + 170 && grap.active) { aimAt(ROOM_C + portalDir * ROOM_HALF); ropeDash(); }
     static int roomBefore = -1;
     if (phase == 1 && frame == t0 + 159) roomBefore = currentCell;
     if (phase == 1 && frame > t0 + 163 && currentCell != roomBefore) {
