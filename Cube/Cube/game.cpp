@@ -23,7 +23,7 @@ void spawnSparks(glm::vec3 p, glm::vec3 color, int n, float speed) {
 void spawnWave() {
     ++wave;
     waveBannerT = 2.5f;
-    int count = std::min(2 + wave, 8);
+    int count = 6 + 6 * wave;      // 12, 18, 24
     for (int i = 0; i < count; ++i) {
         // 방이 회전하면 구조물 위치가 바뀌므로 빈 자리를 찾아 스폰
         glm::vec3 spot(0.0f);
@@ -35,7 +35,8 @@ void spawnWave() {
         if (!found) continue;
         Enemy e{};
         e.pos = spot;
-        e.shootCd = frand(1.5f, 3.0f);
+        e.shootCd = frand(2.5f, 5.0f);
+        e.spawnT = -frand(0.0f, 1.2f);     // 한꺼번에 솟지 않고 조금씩 엇갈려 올라온다
         e.strafe = frand(0, 1) < 0.5f ? -1.0f : 1.0f;
         e.alive = true;
         enemies.push_back(e);
@@ -465,6 +466,8 @@ void updatePlayer(float dt) {
 }
 
 void updateEnemies(float dt) {
+    int enemyBullets = 0;
+    for (const auto& b : bullets) enemyBullets += b.alive && !b.fromPlayer;
     glm::vec3 head = player.pos + glm::vec3(0, 1.45f, 0);
     for (auto& e : enemies) {
         if (!e.alive) continue;
@@ -498,10 +501,11 @@ void updateEnemies(float dt) {
         bool see = !segmentBlocked(muzzle, head);
         e.aimT = glm::clamp(e.aimT + (see ? dt * 2.0f : -dt), 0.0f, 1.0f);
         e.shootCd -= dt;
-        if (e.shootCd <= 0.0f && see && !player.dead && e.aimT > 0.8f) {
+        if (e.shootCd <= 0.0f && see && !player.dead && e.aimT > 0.8f && enemyBullets < ENEMY_BULLET_CAP) {
+            ++enemyBullets;
             glm::vec3 aim = player.pos + glm::vec3(0, 1.25f, 0) + glm::vec3(frand(-0.4f, 0.4f), frand(-0.3f, 0.3f), frand(-0.4f, 0.4f));
             bullets.push_back({ muzzle, glm::normalize(aim - muzzle) * 15.0f, false, true, 6.0f });
-            e.shootCd = frand(1.8f, 3.2f);
+            e.shootCd = frand(2.5f, 5.0f);
             spawnSparks(muzzle, glm::vec3(1.0f, 0.55f, 0.15f), 4, 1.5f);
         }
     }
@@ -620,19 +624,19 @@ void update(float realDt) {
     updateDebris(worldDt);
 
     // 정해진 웨이브를 다 막으면 방 클리어 → 이 방의 포털이 열린다
-    if (!roomCleared[currentCell] && enemies.empty() && !player.dead) {
-        if (wave >= ROOM_WAVES) {
+    if (!roomCleared[currentCell] && !player.dead) {
+        if (wave >= ROOM_WAVES && enemies.empty()) {
             roomCleared[currentCell] = true;
             bannerText = "ROOM CLEAR - PORTALS OPEN";
             bannerT = 3.0f;
             player.hp = std::min(stats.maxHp, player.hp + stats.clearHeal);
             bannerText = "ROOM CLEAR - TAKE THE AUGMENT [F]";
             placeAugmentPickup();
-        } else {
+        } else if (wave < ROOM_WAVES && (int)enemies.size() <= WAVE_NEXT_AT) {
             waveTimer -= realDt;
             if (waveTimer <= 0.0f) {
                 spawnWave();
-                waveTimer = 2.0f;
+                waveTimer = 1.5f;
             }
         }
     }

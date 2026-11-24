@@ -208,6 +208,11 @@ void shotScript(int frame, int w, int h) {
         std::cout << "[test] room after 2.5s: wave " << wave << " enemies " << enemies.size() << " onGround " << player.onGround << " y " << player.pos.y << "\n";
         aimAt(ROOM_C);
         shot(2);
+        // 물량: 웨이브 하나에 12 + 18 마리가 실제로 빈 자리를 찾아 나오는지
+        int before = (int)enemies.size();
+        while (wave < 2) spawnWave();
+        int spawned = (int)enemies.size() - before;
+        std::cout << "[test] waves 1-2 spawned " << spawned << " (expect up to 30)" << (spawned >= 24 ? "" : " FAIL") << "\n";
         // 방 강제 클리어: 마지막 웨이브까지 진행된 것으로 하고 적을 모두 처치
         wave = ROOM_WAVES;
         for (auto& e : enemies) killEnemy(e, glm::vec3(0, 0, 1));

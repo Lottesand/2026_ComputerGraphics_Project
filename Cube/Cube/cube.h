@@ -178,7 +178,10 @@ const int HUB_CELL = 13;
 const int ARENA_CELL = 26;
 
       // (1, 1, 1) 꼭짓점 칸. 데모 때 만든 경기장 샘플이 이 칸의 바닥에 놓인다
-const int ROOM_WAVES = 2;
+const int ROOM_WAVES = 3;
+
+const int WAVE_NEXT_AT = 4;             // 남은 적이 이 수 이하가 되면 다음 웨이브가 몰려온다 (핵 앤 슬래시식 물량)
+const int ENEMY_BULLET_CAP = 6;         // 적이 많아도 동시에 날아다니는 적 총알은 이만큼까지
 
            // 칸(방) 번호 기준. 방이 회전해 자리를 옮겨도 클리어 기록은 방을 따라간다
 
