@@ -6,15 +6,23 @@ in vec4 lsPos;
 in float viewDepth;
 in vec3 oPos;
 in vec3 oNormal;
+// 재질은 정점 셰이더가 넘겨준다 (인스턴스 속성 또는 uniform). 물체 하나 안에서는 같은 값이라 flat
+flat in vec3 fColor;
+flat in float fKs, fShin, fEmis, fTexScale;
+flat in int fTexLayer, fPattern;
+flat in vec3 fObjScale;
+#define objColor fColor
+#define Ks fKs
+#define shininess fShin
+#define emissive fEmis
+#define pattern fPattern            // 0 단색, 1 바닥 타일, 2 콘크리트 노이즈, 3 유리 격자 벽
+#define texLayer fTexLayer          // -1 이면 텍스처 없음
+#define texScale fTexScale          // 텍스처 한 장이 덮는 길이 (음수면 면 하나에 한 장)
+#define objScale fObjScale
 
 layout (location = 0) out vec4 outColor;
 layout (location = 1) out vec4 outNormal;   // 뷰 공간 법선 + 선형 깊이 (외곽선 검출용)
 
-uniform vec3 objColor;
-uniform float Ks;
-uniform float shininess;
-uniform float emissive;
-uniform int pattern;                // 0 단색, 1 바닥 타일, 2 콘크리트 노이즈, 3 유리 격자 벽
 uniform float alpha;                // 1 불투명, 1 미만은 반투명(포털 막)
 
 uniform vec3 sunDir;                // 표면 → 태양 방향
@@ -33,9 +41,6 @@ uniform float pointPower;
 
 // 텍스처 매핑: 코드로 만든 이미지 배열. 물체 공간 좌표를 면 방향에 맞는 평면에 투영해 UV 로 쓴다
 uniform sampler2DArray albedoTex;
-uniform int texLayer;               // -1 이면 텍스처 없음
-uniform float texScale;             // 텍스처 한 장이 덮는 길이
-uniform vec3 objScale;
 
 // 점광원(조명등, 네온) 여러 개. 카메라에서 가까운 것만 CPU 가 골라서 보낸다
 const int MAX_LIGHTS = 24;

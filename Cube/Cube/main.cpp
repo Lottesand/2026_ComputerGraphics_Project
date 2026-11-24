@@ -24,6 +24,7 @@
 #include <thread>
 #include <numeric>
 #include <cstdint>
+#include <cstddef>
 
 const float PI = 3.1415926535f;
 const float FAR_PLANE = 200.0f;
@@ -1758,7 +1759,80 @@ void createTargets(int w, int h) {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
+// ===================================================================
+// 인스턴싱: 불투명한 상자/파편은 그리는 즉시 GPU 로 보내지 않고 모았다가, 패스 끝에 메쉬마다 한 번에 그린다.
+// 상자 수천 개도 그리기 호출 몇 번으로 끝나 CPU 병목(드로우 콜)이 사라진다
+// ===================================================================
+struct Inst {
+    glm::mat4 m;
+    glm::vec4 colorEmis;    // rgb, 자체발광
+    glm::vec4 mat;          // ks, shininess, 텍스처 층, 텍스처 크기
+    float pattern;
+};
+struct Batch { const Mesh* mesh; GLuint vao = 0; std::vector<Inst> items; };
+Batch batches[2];           // 0 = 상자, 1 = 사면체 파편
+GLuint instVbo = 0;
+bool batching = false;
+GLint sceneInstancedLoc = -1, shadowInstancedLoc = -1;
+
+void createInstancing() {
+    glGenBuffers(1, &instVbo);
+    const Mesh* meshes[2] = { &cubeMesh, &tetraMesh };
+    for (int b = 0; b < 2; ++b) {
+        batches[b].mesh = meshes[b];
+        glGenVertexArrays(1, &batches[b].vao);
+        glBindVertexArray(batches[b].vao);
+        glBindBuffer(GL_ARRAY_BUFFER, meshes[b]->vbo);
+        for (int a = 0; a < 3; ++a) {
+            glVertexAttribPointer(a, 3, GL_FLOAT, GL_FALSE, 9 * sizeof(float), (void*)(a * 3 * sizeof(float)));
+            glEnableVertexAttribArray(a);
+        }
+        glBindBuffer(GL_ARRAY_BUFFER, instVbo);
+        const GLsizei stride = sizeof(Inst);
+        for (int c = 0; c < 4; ++c) {   // mat4 = vec4 속성 4개
+            glVertexAttribPointer(3 + c, 4, GL_FLOAT, GL_FALSE, stride, (void*)(offsetof(Inst, m) + c * sizeof(glm::vec4)));
+            glEnableVertexAttribArray(3 + c);
+            glVertexAttribDivisor(3 + c, 1);
+        }
+        glVertexAttribPointer(7, 4, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(Inst, colorEmis));
+        glVertexAttribPointer(8, 4, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(Inst, mat));
+        glVertexAttribPointer(9, 1, GL_FLOAT, GL_FALSE, stride, (void*)offsetof(Inst, pattern));
+        for (int a = 7; a <= 9; ++a) {
+            glEnableVertexAttribArray(a);
+            glVertexAttribDivisor(a, 1);
+        }
+        glBindVertexArray(0);
+    }
+}
+
+// 모아 둔 인스턴스를 메쉬마다 한 번의 glDrawArraysInstanced 로 그린다
+void flushBatches() {
+    GLint loc = shadowPass ? shadowInstancedLoc : sceneInstancedLoc;
+    glUniform1i(loc, 1);
+    for (auto& b : batches) {
+        if (b.items.empty()) continue;
+        glBindBuffer(GL_ARRAY_BUFFER, instVbo);
+        glBufferData(GL_ARRAY_BUFFER, b.items.size() * sizeof(Inst), nullptr, GL_STREAM_DRAW);   // 이전 프레임 버퍼를 버리고 새로 받음
+        glBufferSubData(GL_ARRAY_BUFFER, 0, b.items.size() * sizeof(Inst), b.items.data());
+        glBindVertexArray(b.vao);
+        glDrawArraysInstanced(GL_TRIANGLES, 0, b.mesh->count, (GLsizei)b.items.size());
+        ++statDrawCalls;
+        statTriangles += (long long)b.mesh->count / 3 * (long long)b.items.size();
+        b.items.clear();    // 용량은 남겨 두어 다음 프레임에 다시 할당하지 않는다
+    }
+    glBindVertexArray(0);
+    glUniform1i(loc, 0);
+}
+
 void drawMesh(const Mesh& mesh, const glm::mat4& m, const Material& mat) {
+    if (batching) {
+        int bi = &mesh == &cubeMesh ? 0 : (&mesh == &tetraMesh ? 1 : -1);
+        if (bi >= 0) {
+            batches[bi].items.push_back({ m, glm::vec4(mat.color, mat.emissive),
+                                          glm::vec4(mat.ks, mat.shininess, (float)mat.tex, mat.texScale), (float)mat.pattern });
+            return;
+        }
+    }
     if (shadowPass) {
         glUniformMatrix4fv(shadowModelLoc, 1, GL_FALSE, glm::value_ptr(m));
     } else {
@@ -2124,8 +2198,12 @@ void renderFrame(int w, int h) {
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(2.0f, 4.0f);
     glUseProgram(shadowProg);
+    glUniform1i(shadowInstancedLoc, 0);
     glUniformMatrix4fv(shadowVPLoc, 1, GL_FALSE, glm::value_ptr(lightVP));
+    batching = true;
     drawWorld(false);
+    flushBatches();
+    batching = false;
     glDisable(GL_POLYGON_OFFSET_FILL);
     shadowPass = false;
 
@@ -2150,6 +2228,7 @@ void renderFrame(int w, int h) {
     glEnable(GL_DEPTH_TEST);
 
     glUseProgram(sceneProg);
+    glUniform1i(sceneInstancedLoc, 0);
     glUniformMatrix4fv(sl.view, 1, GL_FALSE, glm::value_ptr(view));
     glUniformMatrix4fv(sl.proj, 1, GL_FALSE, glm::value_ptr(proj));
     glUniformMatrix4fv(sl.lightVP, 1, GL_FALSE, glm::value_ptr(lightVP));
@@ -2181,7 +2260,10 @@ void renderFrame(int w, int h) {
     glUniform1i(sl.albedoTex, 1);
     glActiveTexture(GL_TEXTURE0);
     uploadLights(eye);
+    batching = true;
     drawWorld(true);
+    flushBatches();
+    batching = false;
     drawTransparent(eye);
 
     glClear(GL_DEPTH_BUFFER_BIT);
@@ -2599,7 +2681,7 @@ const BenchScene BENCH[] = {
     { "STRESS 14 +2000 box", 14, glm::vec3(0, 0, 0), 0.2f, 2000, true },
     { "STRESS 14 +8000 box", 14, glm::vec3(0, 0, 0), 0.2f, 8000, true },
 };
-const int BENCH_WARM = 40, BENCH_MEAS = 240;
+const int BENCH_WARM = 120, BENCH_MEAS = 240;   // 시작 직후 드라이버 준비(셰이더·텍스처 업로드) 시간이 섞이지 않도록 예열을 넉넉히
 
 void benchSetup(const BenchScene& s) {
     if (s.cell == 24) turnSlice(1, 1, 1);   // 윗층을 돌려 24번 방의 방향을 바꿔 둔다
@@ -2757,9 +2839,12 @@ int main(int argc, char** argv) {
     sl.lightRange = U(sceneProg, "lightRange");
     shadowModelLoc = U(shadowProg, "model");
     shadowVPLoc = U(shadowProg, "lightVP");
+    sceneInstancedLoc = U(sceneProg, "instanced");
+    shadowInstancedLoc = U(shadowProg, "instanced");
 
     cubeMesh = buildCube();
     tetraMesh = buildTetra();
+    createInstancing();
     glGenVertexArrays(1, &emptyVao);
     glGenVertexArrays(1, &hudVao);
     glGenBuffers(1, &hudVbo);
