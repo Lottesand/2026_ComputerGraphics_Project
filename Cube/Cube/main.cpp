@@ -301,7 +301,10 @@ const glm::vec3 FACE_COLORS[6] = {
     { 0.85f, 0.14f, 0.14f }, { 1.0f, 0.48f, 0.08f }, { 0.95f, 0.95f, 0.95f },
     { 1.0f, 0.85f, 0.12f }, { 0.12f, 0.68f, 0.25f }, { 0.13f, 0.33f, 0.85f },
 };
-const int START_CELL = 26;      // (1, 1, 1) 꼭짓점 칸. 지금의 맵이 이 칸의 바닥에 놓인다
+const int HUB_CELL = 13;        // (0, 0, 0) 정중앙 칸. 어느 면을 돌려도 위치가 변하지 않는 기차역 허브
+const int ARENA_CELL = 26;      // (1, 1, 1) 꼭짓점 칸. 데모 때 만든 경기장 샘플이 이 칸의 바닥에 놓인다
+const int ROOM_WAVES = 2;       // 이 수만큼 웨이브를 막으면 방 클리어 → 포털이 열린다
+bool roomCleared[27];           // 칸(방) 번호 기준. 방이 회전해 자리를 옮겨도 클리어 기록은 방을 따라간다
 
 struct Theme { glm::vec3 wall, crate, neon; };
 const Theme THEMES[6] = {
@@ -319,7 +322,7 @@ struct Cubie {
 };
 
 Cubie cubies[27];
-int currentCell = START_CELL;
+int currentCell = HUB_CELL;
 glm::mat3 worldOrient(1.0f);    // 지금 월드에 실제로 적용된 방향
 
 // 축(0 x, 1 y, 2 z) 기준 오른손 방향 90도 * turns 회전. 정수 행렬이라 오차가 쌓이지 않는다
@@ -391,23 +394,158 @@ void addFaceProps(int face, std::mt19937& r, const Theme& t) {
         place(pa - 4.0f - 3.6f + 0.8f * i, pb, 0.8f, 3.0f, 0.0f, (i + 1) * 0.5f, wall);
 }
 
+// ===================================================================
+// 허브: 큐브 정중앙의 기차역. 8방향 선로를 따라 기차가 계속 달린다
+// ===================================================================
+glm::mat4 TRS(glm::vec3 t, glm::vec3 s);
+
+// 방 좌표계 → 월드: 방 중심을 기준으로 현재 방향(worldOrient)만큼 회전
+glm::mat4 roomToWorld() {
+    return glm::translate(glm::mat4(1.0f), ROOM_C) * glm::mat4(worldOrient) * glm::translate(glm::mat4(1.0f), -ROOM_C);
+}
+
+// 회전된 상자(대각선 선로 등). 축 정렬 상자가 아니라 충돌은 없고 그리기만 한다 (방 좌표계)
+struct Decor { glm::mat4 model; Material mat; };
+std::vector<Decor> localDecor;
+
+// 선로: 방 좌표계의 직선. 기차 머리는 sMin(벽 속)에서 나와 sMax(반대쪽 벽 속)로 들어간다
+struct Track {
+    glm::vec3 c, dir;       // 선로 위의 한 점(높이 포함), 진행 방향(수평 단위 벡터)
+    float sMin, sMax, speed, phase;
+    int cars;
+};
+std::vector<Track> tracks;
+const float CAR_LEN = 7.0f, CAR_GAP = 0.6f, CAR_W = 2.6f, CAR_H = 3.0f;
+float trainTime = 0.0f;
+
+// 선로 위 거리 s 지점의 좌표계: x = 진행 방향, y = 위, z = 옆 (방 좌표계)
+glm::mat4 trackFrame(const Track& t, float s, float yOff) {
+    glm::vec3 p = t.c + t.dir * s + glm::vec3(0, yOff, 0);
+    glm::vec3 z = glm::normalize(glm::cross(t.dir, glm::vec3(0, 1, 0)));
+    return glm::mat4(glm::vec4(t.dir, 0), glm::vec4(0, 1, 0, 0), glm::vec4(z, 0), glm::vec4(p, 1));
+}
+
+// i번째 객차 중심의 선로 위 거리. 한 바퀴(벽→벽 + 열차 길이 + 쉬는 구간)마다 반복
+float carS(const Track& t, int i) {
+    float trainLen = t.cars * (CAR_LEN + CAR_GAP);
+    float period = (t.sMax - t.sMin) + trainLen + 30.0f;
+    float head = t.sMin + fmodf(t.phase + t.speed * trainTime, period);
+    return head - CAR_LEN * 0.5f - i * (CAR_LEN + CAR_GAP);
+}
+
+bool carVisible(const Track& t, float s) { return s > t.sMin - CAR_LEN && s < t.sMax + CAR_LEN; }
+
+void buildHub() {
+    const float H = ROOM_HALF;
+    Material glass{ glm::vec3(0.36f, 0.43f, 0.52f), 0.6f, 64.0f, 0.06f, 3 };
+    Material floorM{ glm::vec3(0.34f, 0.35f, 0.38f), 0.35f, 32.0f, 0.0f, 1 };
+    Material conc{ glm::vec3(0.46f, 0.47f, 0.5f), 0.15f, 16.0f, 0.0f, 2 };
+    Material railM{ glm::vec3(0.2f, 0.21f, 0.23f), 0.8f, 64.0f, 0.0f, 0 };
+    Material lamp{ glm::vec3(0.85f, 0.92f, 1.0f), 0.0f, 1.0f, 2.2f, 0 };
+    for (int f = 0; f < 6; ++f) {
+        glm::vec3 d = FACE_DIRS[f], ad = glm::abs(d);
+        Box shell{ ROOM_C + d * (H + 0.5f), ad + (glm::vec3(1.0f) - ad) * (H * 2.0f + 2.0f), f == 3 ? floorM : glass, true };
+        shell.shellDir = d;
+        localBoxes.push_back(shell);
+    }
+    // 세 층의 둘레 발코니(콘코스)와 가장자리 조명
+    const float bw = 4.5f;
+    for (int lv = 1; lv <= 3; ++lv) {
+        float y = lv * 13.0f;
+        for (int s = -1; s <= 1; s += 2) {
+            addBox({ 0, y - 0.4f, s * (H - bw * 0.5f) }, { H * 2.0f, 0.8f, bw }, conc);
+            addBox({ s * (H - bw * 0.5f), y - 0.4f, 0 }, { bw, 0.8f, H * 2.0f - bw * 2.0f }, conc);
+            addBox({ 0, y - 0.85f, s * (H - bw) }, { H * 2.0f - bw * 2.0f, 0.1f, 0.25f }, lamp, false);
+            addBox({ s * (H - bw), y - 0.85f, 0 }, { 0.25f, 0.1f, H * 2.0f - bw * 2.0f }, lamp, false);
+        }
+    }
+    // 모서리 기둥과 층을 가로지르는 다리
+    for (int sx = -1; sx <= 1; sx += 2)
+        for (int sz = -1; sz <= 1; sz += 2)
+            addBox({ sx * (H - 1.6f), H, sz * (H - 1.6f) }, { 3.2f, H * 2.0f, 3.2f }, conc);
+    addBox({ 10.0f, 12.6f, 0 }, { 4.0f, 0.8f, H * 2.0f - bw * 2.0f }, conc);
+    addBox({ 0, 25.6f, -9.0f }, { H * 2.0f - bw * 2.0f, 0.8f, 4.0f }, conc);
+    addBox({ -7.0f, 38.6f, 0 }, { 4.0f, 0.8f, H * 2.0f - bw * 2.0f }, conc);
+    // 바닥 콘코스: 벤치와 안내판 기둥
+    for (int i = 0; i < 6; ++i) {
+        float a = i * PI / 3.0f;
+        addBox({ cosf(a) * 9.0f, 0.25f, sinf(a) * 9.0f }, { 2.4f, 0.5f, 0.8f }, conc);
+        addBox({ cosf(a) * 15.0f, 1.6f, sinf(a) * 15.0f }, { 0.3f, 3.2f, 0.3f }, railM);
+        addBox({ cosf(a) * 15.0f, 3.3f, sinf(a) * 15.0f }, { 1.6f, 0.5f, 0.12f }, lamp, false);
+    }
+
+    // 8방향 선로. 높이를 모두 달리 해서 서로, 그리고 발코니와 부딪히지 않는다
+    tracks.clear();
+    const float hs[8] = { 4.0f, 9.0f, 16.0f, 21.0f, 28.5f, 33.5f, 41.0f, 46.0f };
+    const int dirOrder[8] = { 0, 5, 2, 7, 4, 1, 6, 3 };
+    for (int k = 0; k < 8; ++k) {
+        float th = dirOrder[k] * PI * 0.25f;
+        glm::vec3 d(cosf(th), 0.0f, sinf(th));
+        if (fabsf(d.x) < 1e-4f) d.x = 0.0f;
+        if (fabsf(d.z) < 1e-4f) d.z = 0.0f;
+        glm::vec3 perp(-d.z, 0.0f, d.x);
+        Track t;
+        t.dir = d;
+        t.c = perp * (((k * 3) % 5 - 2) * 2.5f) + glm::vec3(0, hs[k], 0);
+        t.sMin = -1e9f;
+        t.sMax = 1e9f;
+        for (int i : { 0, 2 }) {
+            if (fabsf(d[i]) < 1e-3f) continue;
+            float a = ((H - 0.3f) - t.c[i]) / d[i], b = (-(H - 0.3f) - t.c[i]) / d[i];
+            t.sMax = std::min(t.sMax, std::max(a, b));
+            t.sMin = std::max(t.sMin, std::min(a, b));
+        }
+        t.speed = 11.0f + (k % 3) * 2.5f;
+        t.cars = 4 + k % 2;
+        // 시작할 때 기차들이 이미 방 곳곳을 달리고 있도록 출발 위치를 흩어 둔다
+        float period = (t.sMax - t.sMin) + t.cars * (CAR_LEN + CAR_GAP) + 30.0f;
+        t.phase = fmodf(k * 0.618f, 1.0f) * (t.sMax - t.sMin) * 0.8f + t.cars * (CAR_LEN + CAR_GAP);
+        t.phase = fmodf(t.phase, period);
+        tracks.push_back(t);
+        // 고가 선로(콘크리트 들보) + 레일 두 줄 + 아래 조명
+        float mid = (t.sMin + t.sMax) * 0.5f, len = t.sMax - t.sMin + 1.0f;
+        localDecor.push_back({ trackFrame(t, mid, -0.45f) * glm::scale(glm::mat4(1.0f), glm::vec3(len, 0.8f, 3.4f)), conc });
+        for (int s = -1; s <= 1; s += 2)
+            localDecor.push_back({ trackFrame(t, mid, 0.02f) * TRS(glm::vec3(0, 0, s * 0.75f), glm::vec3(len, 0.14f, 0.14f)), railM });
+        localDecor.push_back({ trackFrame(t, mid, -0.9f) * glm::scale(glm::mat4(1.0f), glm::vec3(len, 0.06f, 0.3f)), lamp });
+    }
+}
+
+// 각 면 중앙은 포털 자리라 비워 둔다. 90도 회전은 면 중앙을 면 중앙으로 보내므로 어느 방향으로 돌아도 맞다
+void clearPortalZones() {
+    localBoxes.erase(std::remove_if(localBoxes.begin(), localBoxes.end(), [](const Box& b) {
+        if (b.shellDir != glm::vec3(0.0f)) return false;
+        glm::vec3 p = b.center - ROOM_C;
+        for (const auto& d : FACE_DIRS) {
+            float along = glm::dot(p, d);
+            glm::vec3 lat = glm::abs(p - d * along);
+            if (along > ROOM_HALF - 13.0f && std::max({ lat.x, lat.y, lat.z }) < 7.0f) return true;
+        }
+        return false;
+    }), localBoxes.end());
+}
+
 // 칸 번호로부터 방을 만든다 (같은 칸은 언제나 같은 모양)
 void buildLocalWorld(int cell) {
     localBoxes.clear();
-    bool start = cell == START_CELL;
-    const Theme& t = THEMES[start ? 0 : cell % 6];
+    localDecor.clear();
+    tracks.clear();
+    if (cell == HUB_CELL) { buildHub(); return; }
+    bool arena = cell == ARENA_CELL;
+    const Theme& t = THEMES[arena ? 0 : cell % 6];
     std::mt19937 r(7919u * (unsigned)cell + 13u);
     for (int f = 0; f < 6; ++f) {
         glm::vec3 d = FACE_DIRS[f], ad = glm::abs(d);
-        glm::vec3 base = start && f == 3 ? M_FLOOR.color : t.wall;
+        glm::vec3 base = arena && f == 3 ? M_FLOOR.color : t.wall;
         Material m{ glm::mix(base, FACE_COLORS[f], f == 3 ? 0.18f : 0.42f), 0.2f, 24.0f, 0.0f, 1 };
         Box shell{ ROOM_C + d * (ROOM_HALF + 0.5f), ad + (glm::vec3(1.0f) - ad) * (ROOM_HALF * 2.0f + 2.0f), m, true };
         shell.shellDir = d;
         localBoxes.push_back(shell);
     }
     for (int f = 0; f < 6; ++f)
-        if (!(start && f == 3)) addFaceProps(f, r, t);
-    if (start) buildArena();
+        if (!(arena && f == 3)) addFaceProps(f, r, t);
+    if (arena) buildArena();
+    clearPortalZones();
 }
 
 // 90도 회전이므로 축 정렬 상자는 회전해도 축 정렬 상자다. 충돌/중력 코드를 그대로 쓸 수 있는 이유
@@ -553,7 +691,7 @@ void spawnWave() {
 void resetGame() {
     enemies.clear(); bullets.clear(); shards.clear(); sparks.clear();
     player = Player{};
-    player.pos = glm::vec3(0, 0, 15);
+    player.pos = glm::vec3(0, 0, 4);
     for (int attempt = 0; attempt < 60 && !spotIsFree(player.pos, 0.6f); ++attempt)
         player.pos = glm::vec3(frand(-18, 18), 0, frand(-18, 18));
     player.hp = 3;
@@ -562,6 +700,163 @@ void resetGame() {
     waveTimer = 1.0f;
     timeScale = 1.0f;
     focusEnergy = 1.0f;
+}
+
+// ===================================================================
+// 웹스윙(그래플)과 기차 매달리기
+// ===================================================================
+struct Grapple {
+    bool active = false, onTrain = false;
+    glm::vec3 anchor{ 0.0f };   // 줄이 걸린 점 (월드)
+    float len = 0.0f;           // 줄 길이. 당기면서 줄어든다
+    int track = -1, car = 0;
+    float side = 1.0f;          // 객차의 어느 옆면에 매달렸는지
+} grap;
+bool shiftWasDown = false, testShift = false, grappleAimOK = false;
+const float GRAPPLE_RANGE = 70.0f;
+
+glm::mat4 carWorld(int k, int i) {
+    return roomToWorld() * trackFrame(tracks[k], carS(tracks[k], i), CAR_H * 0.5f + 0.1f);
+}
+
+// 시선 광선이 처음 닿는 곳: 달리는 객차(회전된 상자) 또는 고정 구조물
+bool castGrapple(glm::vec3 o, glm::vec3 d, Grapple& out) {
+    float best = 2.0f, tw;
+    glm::vec3 p1 = o + d * GRAPPLE_RANGE;
+    if (segmentBlocked(o, p1, &tw) && tw <= 1.0f) {
+        best = tw;
+        out = Grapple{};
+        out.active = true;
+        out.anchor = o + (p1 - o) * tw;
+    }
+    for (int k = 0; k < (int)tracks.size(); ++k)
+        for (int i = 0; i < tracks[k].cars; ++i) {
+            if (!carVisible(tracks[k], carS(tracks[k], i))) continue;
+            // 광선을 객차의 단위 상자 좌표계로 옮기면(역행렬) 축 정렬 상자 검사를 그대로 쓸 수 있다
+            glm::mat4 inv = glm::inverse(carWorld(k, i) * glm::scale(glm::mat4(1.0f), glm::vec3(CAR_LEN, CAR_H, CAR_W)));
+            glm::vec3 a = glm::vec3(inv * glm::vec4(o, 1.0f)), b = glm::vec3(inv * glm::vec4(p1, 1.0f));
+            float t;
+            if (segAABB(a, b, glm::vec3(-0.5f), glm::vec3(0.5f), t) && t < best) {
+                best = t;
+                out = Grapple{};
+                out.active = out.onTrain = true;
+                out.track = k;
+                out.car = i;
+                out.anchor = o + (p1 - o) * t;
+            }
+        }
+    return best <= 1.0f;
+}
+
+void releaseGrapple() { grap = Grapple{}; }
+
+void tryGrapple() {
+    Grapple g;
+    if (!castGrapple(eyePosition(), forwardDir(), g)) return;
+    g.len = std::max(2.5f, glm::length(player.pos + glm::vec3(0, 1.5f, 0) - g.anchor));
+    if (g.onTrain) {
+        glm::mat4 C = carWorld(g.track, g.car);
+        g.side = glm::dot(glm::vec3(C[2]), player.pos - glm::vec3(C[3])) >= 0.0f ? 1.0f : -1.0f;
+    }
+    grap = g;
+    player.onGround = false;
+}
+
+// ===================================================================
+// 방 이동: 포털과 기차
+// ===================================================================
+bool portalArmed = true;        // 도착 직후 같은 포털로 되돌아가지 않도록, 포털 밖으로 한 번 나가야 다시 켜진다
+float bannerT = 0.0f;
+std::string bannerText;
+
+bool portalsOn() { return currentCell != HUB_CELL; }
+
+// 지금 방에서 월드 방향 D(축 방향)의 벽 너머에 붙어 있는 칸. 큐브를 돌리면 결과가 바뀐다
+int portalTarget(glm::vec3 D) {
+    glm::ivec3 p = cubies[currentCell].pos + glm::ivec3(glm::round(D));
+    if (std::abs(p.x) > 1 || std::abs(p.y) > 1 || std::abs(p.z) > 1) return -1;
+    return cubieAt(p);
+}
+
+// D 방향으로 나가서 칸 id 로 들어간다. 큐브 방향과 월드 방향이 같으므로 반대쪽(-D) 벽 근처에서 나타난다
+void travelTo(int id, glm::vec3 D) {
+    releaseGrapple();
+    currentCell = id;
+    worldOrient = cubies[id].orient;
+    buildLocalWorld(id);
+    rebuildWorld();
+    enemies.clear(); bullets.clear(); shards.clear(); sparks.clear();
+    wave = 0;
+    waveTimer = 1.5f;
+    const float H = ROOM_HALF;
+    if (glm::length(D) < 0.5f) {
+        player.pos = glm::vec3(0, 0, 4);
+        player.vel = glm::vec3(0.0f);
+    } else if (fabsf(D.y) > 0.5f) {
+        // 천장으로 나가면 위 방의 바닥에서, 바닥으로 나가면 아래 방의 천장에서 나타난다
+        player.pos = D.y > 0.0f ? glm::vec3(0, 0.2f, 7.0f) : glm::vec3(0, H * 2.0f - 4.0f, 7.0f);
+        player.vel = glm::vec3(0, D.y > 0.0f ? 9.0f : 0.0f, 0);
+    } else {
+        glm::vec3 h = glm::normalize(glm::vec3(D.x, 0, D.z));
+        float y = glm::clamp(player.pos.y, 0.5f, H * 2.0f - 4.0f);
+        player.pos = -h * (H - 3.5f) + glm::vec3(0, y, 0);
+        player.vel = h * 7.0f + glm::vec3(0, 3.0f, 0);
+        player.yaw = atan2f(h.x, -h.z);
+    }
+    player.onGround = false;
+    portalArmed = false;
+    bannerText = id == HUB_CELL ? "HUB" : "ROOM " + std::to_string(id);
+    bannerT = 2.5f;
+}
+
+void restartRun() {
+    initCube();
+    for (bool& c : roomCleared) c = false;
+    roomCleared[HUB_CELL] = true;
+    currentCell = HUB_CELL;
+    worldOrient = glm::mat3(1.0f);
+    buildLocalWorld(currentCell);
+    rebuildWorld();
+    resetGame();
+    releaseGrapple();
+    portalArmed = true;
+    bannerText = "HUB - SHIFT TO GRAPPLE A TRAIN";
+    bannerT = 4.0f;
+}
+
+void updatePortals() {
+    if (!portalsOn() || player.dead) return;
+    glm::vec3 p = player.pos + glm::vec3(0, 0.9f, 0) - ROOM_C;
+    bool inside = false;
+    for (const auto& D : FACE_DIRS) {
+        float along = glm::dot(p, D);
+        glm::vec3 lat = glm::abs(p - D * along);
+        if (along < ROOM_HALF - 1.6f || std::max({ lat.x, lat.y, lat.z }) > 4.2f) continue;
+        inside = true;
+        int target = portalTarget(D);
+        if (portalArmed && roomCleared[currentCell] && target >= 0) { travelTo(target, D); return; }
+    }
+    if (!inside) portalArmed = true;
+}
+
+// 기차에 매달려 가다가 객차가 벽(포털) 속으로 들어가면 선로가 향하는 칸으로 넘어간다
+void updateTrainRide(float dt) {
+    const Track& t = tracks[grap.track];
+    float s = carS(t, grap.car);
+    if (!carVisible(t, s)) { releaseGrapple(); return; }
+    glm::mat4 C = carWorld(grap.track, grap.car);
+    glm::vec3 center = glm::vec3(C[3]), side = glm::normalize(glm::vec3(C[2])) * grap.side;
+    glm::vec3 target = center + side * (CAR_W * 0.5f + 0.45f) - glm::vec3(0, 1.4f, 0);
+    player.pos += (target - player.pos) * std::min(1.0f, dt * 9.0f);
+    player.vel = worldOrient * t.dir * t.speed;
+    player.onGround = false;
+    grap.anchor = center + side * (CAR_W * 0.5f) + glm::vec3(0, 0.6f, 0);
+    if (s > t.sMax - CAR_LEN * 0.5f) {
+        glm::vec3 D = worldOrient * glm::round(t.dir);     // 대각선 선로면 (±1, 0, ±1)
+        int dest = cubieAt(cubies[currentCell].pos + glm::ivec3(glm::round(D)));
+        if (dest >= 0) travelTo(dest, D);
+        else releaseGrapple();
+    }
 }
 
 // 적 몸체 각 부위의 월드 행렬 (그리기/총구/파편 생성 공용)
@@ -651,12 +946,28 @@ void updatePlayer(float dt) {
     if (glfwGetKey(gWindow, GLFW_KEY_S) == GLFW_PRESS) wish -= f;
     if (glfwGetKey(gWindow, GLFW_KEY_D) == GLFW_PRESS) wish += r;
     if (glfwGetKey(gWindow, GLFW_KEY_A) == GLFW_PRESS) wish -= r;
-    float speed = glfwGetKey(gWindow, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ? 8.5f : 5.5f;
+    float speed = glfwGetKey(gWindow, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ? 8.5f : 5.5f;
     if (glm::length(wish) > 0.01f) wish = glm::normalize(wish) * speed;
 
-    float accel = player.onGround ? 14.0f : 4.0f;
+    // Shift 를 누르는 순간 줄을 쏘고, 떼면 놓는다
+    bool shift = glfwGetKey(gWindow, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS || testShift;
+    if (shift && !shiftWasDown) tryGrapple();
+    if (!shift && grap.active) releaseGrapple();
+    shiftWasDown = shift;
+    if (grap.active && grap.onTrain) {
+        updateTrainRide(dt);
+        return;
+    }
+
     glm::vec2 hv(player.vel.x, player.vel.z), target(wish.x, wish.z);
-    hv += (target - hv) * std::min(1.0f, accel * dt);
+    if (player.onGround) {
+        hv += (target - hv) * std::min(1.0f, 14.0f * dt);
+    } else if (glm::length(target) > 0.01f) {
+        // 공중에서는 원하는 방향으로만 가속하고 속도를 깎지 않는다 → 스윙 관성이 유지된다
+        glm::vec2 wd = glm::normalize(target);
+        float add = speed - glm::dot(hv, wd);
+        if (add > 0.0f) hv += wd * std::min(add, 12.0f * dt);
+    }
     player.vel.x = hv.x;
     player.vel.z = hv.y;
     if (player.onGround && glm::length(hv) > 0.5f) player.bobPhase += dt * glm::length(hv) * 1.5f;
@@ -668,15 +979,33 @@ void updatePlayer(float dt) {
     player.vel.y = std::max(player.vel.y - 18.0f * dt, -30.0f);
 
     player.pos += player.vel * dt;
+    if (grap.active) {
+        // 줄 제약: 손과 고정점 거리가 줄 길이를 넘지 못한다. 줄을 감으면서 진자처럼 흔들린다
+        grap.len = std::max(2.5f, grap.len - 9.0f * dt);
+        glm::vec3 d = player.pos + glm::vec3(0, 1.5f, 0) - grap.anchor;
+        float L = glm::length(d);
+        if (L > grap.len) {
+            glm::vec3 n = d / L;
+            player.pos -= n * (L - grap.len);
+            float vr = glm::dot(player.vel, n);
+            if (vr > 0.0f) player.vel -= n * vr;
+        }
+    }
     for (const auto& b : boxes) {
         if (!b.solid) continue;
         if (b.bmax().y > player.pos.y + STEP_H && b.bmin().y < player.pos.y + PLAYER_H)
             pushOutCircle(player.pos, PLAYER_R, b);
     }
+    player.pos.x = glm::clamp(player.pos.x, -ROOM_HALF + PLAYER_R, ROOM_HALF - PLAYER_R);
+    player.pos.z = glm::clamp(player.pos.z, -ROOM_HALF + PLAYER_R, ROOM_HALF - PLAYER_R);
+    if (player.pos.y > ROOM_HALF * 2.0f - PLAYER_H - 0.05f) {
+        player.pos.y = ROOM_HALF * 2.0f - PLAYER_H - 0.05f;
+        player.vel.y = std::min(player.vel.y, 0.0f);
+    }
 
     float ground = groundHeightAt(player.pos, PLAYER_R * 0.7f);
     bool wasGround = player.onGround;
-    if (player.pos.y <= ground + 0.001f || (wasGround && player.vel.y <= 0.0f && player.pos.y - ground < 0.25f)) {
+    if (player.pos.y <= ground + 0.001f || (!grap.active && wasGround && player.vel.y <= 0.0f && player.pos.y - ground < 0.25f)) {
         if (!wasGround && player.vel.y < -6.0f) player.landDip = 0.18f;
         player.pos.y = ground;
         player.vel.y = 0.0f;
@@ -986,6 +1315,7 @@ void updateCubeView(float dt) {
 }
 
 void openCubeView() {
+    releaseGrapple();
     cubeView = true;
     dragMode = DRAG_NONE;
     sliceAxis = -1;
@@ -1040,11 +1370,7 @@ void closeCubeView() {
 void enterCell(int id) {
     if (id == currentCell) { closeCubeView(); return; }
     leaveCubeInput();
-    currentCell = id;
-    worldOrient = cubies[id].orient;
-    buildLocalWorld(id);
-    rebuildWorld();
-    resetGame();
+    travelTo(id, glm::vec3(0.0f));     // 큐브 화면에서 바로 이동 (개발용)
 }
 
 void update(float realDt) {
@@ -1057,6 +1383,7 @@ void update(float realDt) {
     }
     helpT -= realDt;
     waveBannerT -= realDt;
+    bannerT -= realDt;
 
     // 집중 모드: 세계 시간은 크게 느려지고, 플레이어는 덜 느려짐
     focusActive = !player.dead && focusEnergy > 0.02f &&
@@ -1069,18 +1396,29 @@ void update(float realDt) {
     float worldDt = realDt * timeScale;
     float playerDt = realDt * (0.45f + 0.55f * timeScale);
 
+    trainTime += worldDt;
     updatePlayer(playerDt);
+    updatePortals();
     updateEnemies(worldDt);
     updateBullets(worldDt);
     updateDebris(worldDt);
 
-    if (enemies.empty() && !player.dead) {
-        waveTimer -= realDt;
-        if (waveTimer <= 0.0f) {
-            spawnWave();
-            waveTimer = 2.0f;
+    // 정해진 웨이브를 다 막으면 방 클리어 → 이 방의 포털이 열린다
+    if (!roomCleared[currentCell] && enemies.empty() && !player.dead) {
+        if (wave >= ROOM_WAVES) {
+            roomCleared[currentCell] = true;
+            bannerText = "ROOM CLEAR - PORTALS OPEN";
+            bannerT = 3.0f;
+        } else {
+            waveTimer -= realDt;
+            if (waveTimer <= 0.0f) {
+                spawnWave();
+                waveTimer = 2.0f;
+            }
         }
     }
+    Grapple probe;
+    grappleAimOK = !grap.active && !player.dead && castGrapple(eyePosition(), forwardDir(), probe);
 }
 
 // ===================================================================
@@ -1092,7 +1430,7 @@ GLuint emptyVao, hudVao, hudVbo;
 struct SceneLocs {
     GLint model, view, proj, lightVP, normalMat, objColor, Ks, shininess, emissive, pattern;
     GLint sunDir, sunColor, skyAmb, groundAmb, viewPos, fogColor, fogDensity, farPlane, shadowMap;
-    GLint pointPos, pointColor, pointPower;
+    GLint pointPos, pointColor, pointPower, alpha;
 } sl;
 GLint shadowModelLoc, shadowVPLoc;
 
@@ -1215,15 +1553,84 @@ void drawEnemy(const Enemy& e) {
     drawMesh(cubeMesh, r.arms[1] * TRS({ 0, -0.75f, 0.04f }, { 0.08f, 0.34f, 0.12f }), M_DARK);
 }
 
+void drawPart(const glm::mat4& m, const Material& mat) {
+    if (shadowPass && mat.emissive > 0.0f) return;   // 빛나는 부품은 그림자를 만들지 않는다
+    drawMesh(cubeMesh, m, mat);
+}
+
+// 객차: 선로 좌표계(trackFrame)에 방 회전(roomToWorld)을 곱한 행렬 하나로 몸체와 부품을 모두 배치
+void drawTrains() {
+    Material body{ glm::vec3(0.62f, 0.64f, 0.68f), 0.9f, 72.0f, 0.0f, 0 };
+    Material dark{ glm::vec3(0.12f, 0.13f, 0.15f), 0.5f, 32.0f, 0.0f, 0 };
+    Material win{ glm::vec3(1.0f, 0.8f, 0.52f), 0.0f, 1.0f, 1.1f, 0 };
+    Material red{ glm::vec3(1.0f, 0.12f, 0.08f), 0.0f, 1.0f, 6.0f, 0 };
+    for (int k = 0; k < (int)tracks.size(); ++k) {
+        const Track& t = tracks[k];
+        for (int i = 0; i < t.cars; ++i) {
+            if (!carVisible(t, carS(t, i))) continue;
+            glm::mat4 C = carWorld(k, i);
+            drawPart(C * glm::scale(glm::mat4(1.0f), glm::vec3(CAR_LEN, CAR_H, CAR_W)), body);
+            drawPart(C * TRS({ 0, -CAR_H * 0.5f + 0.3f, 0 }, { CAR_LEN * 0.99f, 0.6f, CAR_W + 0.03f }), dark);
+            drawPart(C * TRS({ 0, CAR_H * 0.5f + 0.06f, 0 }, { CAR_LEN * 0.95f, 0.12f, CAR_W * 0.7f }), dark);
+            drawPart(C * TRS({ 0, 0.35f, 0 }, { CAR_LEN * 0.9f, 0.75f, CAR_W + 0.04f }), win);
+            for (int s = -1; s <= 1; s += 2) {
+                if (i == 0) drawPart(C * TRS({ CAR_LEN * 0.5f + 0.03f, -0.55f, s * 0.8f }, { 0.06f, 0.32f, 0.42f }), red);
+                if (i == t.cars - 1) drawPart(C * TRS({ -CAR_LEN * 0.5f - 0.03f, -0.55f, s * 0.8f }, { 0.06f, 0.32f, 0.42f }), red);
+            }
+        }
+    }
+}
+
+// 포털: 각 면 중앙. 그 방향에 칸이 있을 때만 생기고, 방을 깨면 열린다(청록), 아니면 잠김(빨강)
+void drawPortals(bool films) {
+    if (!portalsOn()) return;
+    bool open = roomCleared[currentCell];
+    for (const auto& D : FACE_DIRS) {
+        if (portalTarget(D) < 0) continue;
+        int n = fabsf(D.x) > 0.5f ? 0 : (fabsf(D.y) > 0.5f ? 1 : 2);
+        int a = (n + 1) % 3, b = (n + 2) % 3;
+        glm::vec3 ad = glm::abs(D), c = ROOM_C + D * ROOM_HALF;
+        if (!films) {
+            Material fm{ open ? glm::vec3(0.3f, 0.95f, 1.0f) : glm::vec3(0.9f, 0.2f, 0.15f), 0.0f, 1.0f, open ? 3.0f : 1.2f, 0 };
+            for (int pass = 0; pass < 2; ++pass) {
+                int along = pass == 0 ? a : b, across = pass == 0 ? b : a;
+                for (int s = -1; s <= 1; s += 2) {
+                    glm::vec3 p = c - D * 0.15f, size = ad * 0.3f;
+                    p[across] += s * 4.2f;
+                    size[along] = 8.9f;
+                    size[across] = 0.5f;
+                    drawPart(TRS(p, size), fm);
+                }
+            }
+        } else if (open) {
+            Material film{ glm::vec3(0.3f, 0.9f, 1.0f), 0.0f, 1.0f, 1.2f + 0.4f * sinf(globalTime * 3.0f), 0 };
+            drawMesh(cubeMesh, TRS(c - D * 0.1f, (glm::vec3(1.0f) - ad) * 8.0f + ad * 0.05f), film);
+        }
+    }
+}
+
 void drawWorld(bool withEffects) {
     for (const auto& b : boxes) {
         if (shadowPass && b.mat.emissive > 0.0f) continue;
         if (b.shellDir != glm::vec3(0.0f)) {
-            // 외벽은 그림자를 드리우지 않고, 맨 위에 온 면은 열어서 하늘이 보이게 한다
-            if (shadowPass || b.shellDir.y > 0.5f) continue;
-            if (rotAnimActive && glm::dot(b.shellDir, preTopDir) > 0.5f) continue;
+            // 외벽은 그림자를 드리우지 않고, 맨 위에 온 면은 열어서 하늘이 보이게 한다 (허브는 유리 지붕)
+            if (shadowPass || (b.shellDir.y > 0.5f && currentCell != HUB_CELL)) continue;
+            if (rotAnimActive && glm::dot(b.shellDir, preTopDir) > 0.5f && currentCell != HUB_CELL) continue;
         }
         drawMesh(cubeMesh, TRS(b.center, b.size), b.mat);
+    }
+    glm::mat4 W = roomToWorld();
+    for (const auto& d : localDecor) drawPart(W * d.model, d.mat);
+    drawTrains();
+    if (!shadowPass) drawPortals(false);
+    if (withEffects && grap.active) {
+        glm::vec3 eye = eyePosition(), fwd = forwardDir();
+        glm::vec3 right = glm::normalize(glm::cross(fwd, glm::vec3(0, 1, 0)));
+        glm::vec3 hand = eye + right * 0.25f - glm::vec3(0, 0.35f, 0) + fwd * 0.4f;
+        glm::vec3 d = grap.anchor - hand;
+        float L = glm::length(d);
+        Material rope{ glm::vec3(0.75f, 0.95f, 1.0f), 0.0f, 1.0f, 2.5f, 0 };
+        if (L > 0.05f) drawMesh(cubeMesh, glm::translate(glm::mat4(1.0f), hand + d * 0.5f) * orientTo(d) * glm::scale(glm::mat4(1.0f), glm::vec3(0.035f, 0.035f, L)), rope);
     }
     for (const auto& e : enemies) drawEnemy(e);
     for (const auto& s : shards) {
@@ -1339,6 +1746,7 @@ void renderCubeView(int w, int h) {
         float glow = 0.0f;
         if (i == currentCell) glow = 0.2f + 0.2f * sinf(globalTime * 5.0f);
         else if (i == hoverCell && dragMode == DRAG_NONE) glow = 0.2f;
+        else if (roomCleared[i]) glow = 0.1f;   // 깬 방은 살짝 밝게
         // 스티커 색 = 그 방의 벽 색. 윗면 스티커 색을 보면 어느 벽이 하늘 쪽인지 알 수 있다
         for (int f = 0; f < 6; ++f)
             drawCubePart(m * TRS(FACE_DIRS[f] * 0.485f, glm::vec3(0.85f) - glm::abs(FACE_DIRS[f]) * 0.82f), FACE_COLORS[f], glow);
@@ -1433,13 +1841,19 @@ void renderFrame(int w, int h) {
     glUniformMatrix4fv(sl.view, 1, GL_FALSE, glm::value_ptr(view));
     glUniformMatrix4fv(sl.proj, 1, GL_FALSE, glm::value_ptr(proj));
     glUniformMatrix4fv(sl.lightVP, 1, GL_FALSE, glm::value_ptr(lightVP));
+    // 허브(유리 지붕 기차역)는 차갑고 어두운 회청색 조명
+    bool hub = currentCell == HUB_CELL;
+    glm::vec3 sunC = hub ? glm::vec3(0.75f, 0.8f, 0.9f) : SUN_COLOR;
+    glm::vec3 fogC = hub ? glm::vec3(0.3f, 0.35f, 0.43f) : SKY_HORIZON;
     glUniform3fv(sl.sunDir, 1, glm::value_ptr(sunW));
-    glUniform3fv(sl.sunColor, 1, glm::value_ptr(SUN_COLOR));
-    glUniform3f(sl.skyAmb, 0.32f, 0.4f, 0.58f);
-    glUniform3f(sl.groundAmb, 0.32f, 0.24f, 0.2f);
+    glUniform3fv(sl.sunColor, 1, glm::value_ptr(sunC));
+    if (hub) glUniform3f(sl.skyAmb, 0.2f, 0.25f, 0.33f);
+    else glUniform3f(sl.skyAmb, 0.32f, 0.4f, 0.58f);
+    if (hub) glUniform3f(sl.groundAmb, 0.1f, 0.11f, 0.13f);
+    else glUniform3f(sl.groundAmb, 0.32f, 0.24f, 0.2f);
     glUniform3fv(sl.viewPos, 1, glm::value_ptr(eye));
-    glUniform3fv(sl.fogColor, 1, glm::value_ptr(SKY_HORIZON));
-    glUniform1f(sl.fogDensity, 0.012f);
+    glUniform3fv(sl.fogColor, 1, glm::value_ptr(fogC));
+    glUniform1f(sl.fogDensity, hub ? 0.016f : 0.012f);
     glUniform1f(sl.farPlane, FAR_PLANE);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, shadowTex);
@@ -1449,7 +1863,22 @@ void renderFrame(int w, int h) {
     glUniform3f(sl.pointColor, 1.0f, 0.75f, 0.4f);
     glUniform1f(sl.pointPower, player.muzzleT > 0.0f ? 6.0f : 0.0f);
 
+    glUniform1f(sl.alpha, 1.0f);
     drawWorld(true);
+
+    // 반투명 포털 막: 불투명한 것을 다 그린 뒤 깊이는 쓰지 않고 알파 블렌딩으로 더한다.
+    // 외곽선 검출용 법선 버퍼(1번)는 건드리지 않는다
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    glDepthMask(GL_FALSE);
+    glColorMaski(1, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glUniform1f(sl.alpha, 0.35f + 0.1f * sinf(globalTime * 2.0f));
+    drawPortals(true);
+    glUniform1f(sl.alpha, 1.0f);
+    glColorMaski(1, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+
     glClear(GL_DEPTH_BUFFER_BIT);
     drawViewModel(view);
 
@@ -1578,7 +2007,9 @@ void renderHUD(int w, int h) {
 
     if (!player.dead) {
         float g = (focusActive ? 9.0f : 6.0f) * ui, l = 6.0f * ui, t = 2.0f * ui;
-        glm::vec4 cc = focusActive ? cyan : white;
+        // 줄을 걸 수 있는 곳을 보고 있으면 조준점이 초록, 기차에 매달려 있으면 노랑
+        glm::vec4 cc = grap.onTrain ? glm::vec4(1.0f, 0.85f, 0.2f, 1.0f)
+                     : (grappleAimOK ? glm::vec4(0.45f, 1.0f, 0.5f, 1.0f) : (focusActive ? cyan : white));
         b.rect(cx - g - l, cy - t * 0.5f, l, t, cc);
         b.rect(cx + g, cy - t * 0.5f, l, t, cc);
         b.rect(cx - t * 0.5f, cy - g - l, t, l, cc);
@@ -1595,16 +2026,23 @@ void renderHUD(int w, int h) {
     for (int i = 0; i < 3; ++i)
         b.rect((24 + i * 22) * ui, 28 * ui, 16 * ui, 16 * ui, i < player.hp ? orange : glm::vec4(0, 0, 0, 0.4f));
 
-    std::string ws = "WAVE " + std::to_string(wave), ks = "KILLS " + std::to_string(kills);
+    std::string ws = currentCell == HUB_CELL ? "HUB"
+                   : (roomCleared[currentCell] ? "ROOM " + std::to_string(currentCell) + " CLEAR"
+                                               : "WAVE " + std::to_string(wave) + "/" + std::to_string(ROOM_WAVES));
+    std::string ks = "KILLS " + std::to_string(kills);
     drawText(b, w - textWidth(ws, 2.2f * ui) - 24 * ui, h - 40 * ui, 2.2f * ui, ws, white);
     drawText(b, w - textWidth(ks, 1.8f * ui) - 24 * ui, h - 66 * ui, 1.8f * ui, ks, white);
     drawText(b, 16 * ui, h - 28 * ui, 1.4f * ui, std::to_string((int)fps) + " FPS", glm::vec4(1, 1, 1, 0.5f));
 
-    if (waveBannerT > 0.0f && !player.dead && !rotAnimActive)
+    if (bannerT > 0.0f && !player.dead && !rotAnimActive)
+        drawTextCentered(b, cx, h * 0.68f, 3.4f * ui, bannerText, glm::vec4(0.6f, 1.0f, 1.0f, std::min(1.0f, bannerT)));
+    else if (waveBannerT > 0.0f && !player.dead && !rotAnimActive)
         drawTextCentered(b, cx, h * 0.68f, 6.0f * ui, "WAVE " + std::to_string(wave), glm::vec4(1, 1, 1, std::min(1.0f, waveBannerT)));
+    if (grap.onTrain)
+        drawTextCentered(b, cx, h * 0.36f, 1.8f * ui, "HOLD SHIFT - RIDING TO THE NEXT ROOM", glm::vec4(1.0f, 0.85f, 0.2f, 1.0f));
     if (helpT > 0.0f) {
         glm::vec4 hc(1, 1, 1, std::min(1.0f, helpT) * 0.85f);
-        drawTextCentered(b, cx, h * 0.26f, 1.7f * ui, "WASD MOVE   SPACE JUMP   SHIFT SPRINT", hc);
+        drawTextCentered(b, cx, h * 0.26f, 1.7f * ui, "WASD MOVE   SPACE JUMP   CTRL SPRINT   HOLD SHIFT GRAPPLE", hc);
         drawTextCentered(b, cx, h * 0.26f - 20 * ui, 1.7f * ui, "LMB SHOOT   HOLD RMB TO SLOW TIME   R RESTART", hc);
     }
     if (player.dead) {
@@ -1678,7 +2116,7 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
         return;
     }
     if (key == GLFW_KEY_ESCAPE) glfwSetWindowShouldClose(window, true);
-    else if (key == GLFW_KEY_R) resetGame();
+    else if (key == GLFW_KEY_R) restartRun();
     else if (key == GLFW_KEY_TAB && !rotAnimActive) openCubeView();
 }
 
@@ -1710,77 +2148,128 @@ void cursor_callback(GLFWwindow* window, double x, double y) {
 
 void saveScreenshot(int w, int h, const std::string& path);
 
-// --shot 실행 시 실제 마우스 처리 함수를 스크립트로 호출해 큐브 조작 전 과정을 캡처 (확인용)
+// --shot 실행 시 실제 게임 함수를 스크립트로 불러 허브 → 기차 → 방 → 클리어 → 포털 → 회전 → 재시작을 확인
+void aimAt(glm::vec3 p) {
+    glm::vec3 d = glm::normalize(p - eyePosition());
+    player.yaw = atan2f(d.x, -d.z);
+    player.pitch = asinf(glm::clamp(d.y, -1.0f, 1.0f));
+}
+
 void shotScript(int frame, int w, int h) {
     auto shot = [&](int n) { saveScreenshot(w, h, "shot_" + std::to_string(n) + ".ppm"); };
-    static glm::vec2 from, to;
-    if (frame == 100) shot(0);
-    if (frame == 101) {
-        openCubeView();
-        std::cout << "[test] turn x4 identity: " << (quarterTurn(0, 4) == glm::mat3(1.0f)) << "\n";
+    auto pv = [](glm::vec3 p) { return std::to_string((int)p.x) + "," + std::to_string((int)p.y) + "," + std::to_string((int)p.z); };
+    static int phase = 0, t0 = 0, rideCell = -1;
+    static glm::vec3 portalDir(0.0f);
+    if (frame == 30) { player.pitch = 0.3f; player.yaw = 0.6f; }
+    if (frame == 59) {
+        // 첫 장면은 가장 가까운 객차를 바라보게 한다
+        float best = 1e9f;
+        glm::vec3 look(0.0f);
+        for (int k = 0; k < (int)tracks.size(); ++k)
+            for (int i = 0; i < tracks[k].cars; ++i) {
+                float s = carS(tracks[k], i);
+                if (s < tracks[k].sMin + 3.0f || s > tracks[k].sMax - 3.0f) continue;
+                glm::vec3 c = glm::vec3(carWorld(k, i)[3]);
+                float d = glm::length(c - eyePosition());
+                if (d < best && d > 12.0f) { best = d; look = c; }
+            }
+        if (best < 1e9f) aimAt(look);
     }
-    if (frame == 115) {     // 큐브 바깥 드래그 → 전체 회전
-        glm::quat before = cubeViewQ;
-        cubeMouseDown(5, 5);
-        cubeMouseMove(45, 5);
-        cubeMouseUp(45, 5);
-        std::cout << "[test] outside drag rotated cube: " << (before != cubeViewQ) << "\n";
-        cubeViewQ = before;
+    if (frame == 60) {
+        shot(0);
+        std::cout << "[test] start cell " << currentCell << " hub " << (currentCell == HUB_CELL) << " tracks " << tracks.size()
+                  << " decor " << localDecor.size() << " boxes " << boxes.size() << "\n";
     }
-    if (frame == 125) {     // 윗면 칸 위에 커서: 줄 강조
-        from = cubeToWindow(glm::vec3(1.0f, 1.5f, 1.0f));
-        updateHover(from.x, from.y);
-        std::cout << "[test] hover cell " << hoverCell << " axis " << hoverAxis << " layer " << hoverLayer << "\n";
+    if (phase == 0 && frame >= 61 && frame % 10 == 1 && !grap.active) {
+        // 시야가 트인 객차 중 벽까지 충분히 남은 것을 골라 조준하고 Shift
+        for (int k = 0; k < (int)tracks.size() && !grap.active; ++k)
+            for (int i = 0; i < tracks[k].cars; ++i) {
+                float s = carS(tracks[k], i);
+                if (s < tracks[k].sMin + 4.0f || s > tracks[k].sMax - 25.0f) continue;
+                glm::vec3 c = glm::vec3(carWorld(k, i)[3]);
+                Grapple g;
+                if (!castGrapple(eyePosition(), glm::normalize(c - eyePosition()), g) || !g.onTrain) continue;
+                aimAt(c);
+                testShift = false;
+                shiftWasDown = false;
+                tryGrapple();
+                testShift = true;
+                std::cout << "[test] grapple at frame " << frame << " active " << grap.active << " onTrain " << grap.onTrain
+                          << " track " << grap.track << " car " << grap.car << "\n";
+                break;
+            }
     }
-    if (frame == 127) shot(1);
-    if (frame == 130) {     // 윗면을 앞뒤로 끌어 x = 1 면 회전 시작
-        to = cubeToWindow(glm::vec3(1.0f, 1.5f, -2.0f));
-        cubeMouseDown(from.x, from.y);
-        cubeMouseMove(from.x + (to.x - from.x) * 0.1f, from.y + (to.y - from.y) * 0.1f);
-        cubeMouseMove(from.x + (to.x - from.x) * 0.5f, from.y + (to.y - from.y) * 0.5f);
-        std::cout << "[test] drag slice axis " << sliceAxis << " layer " << sliceLayer << " angle " << sliceAngle << "\n";
+    if (phase == 0 && grap.onTrain && rideCell < 0) { rideCell = 1; t0 = frame; }
+    if (phase == 0 && rideCell == 1 && frame == t0 + 25) {
+        aimAt(glm::vec3(carWorld(grap.track, grap.car)[3]) + glm::vec3(0, -6, 0) + glm::vec3(worldOrient * tracks[grap.track].dir) * 12.0f);
+        shot(1);
+        std::cout << "[test] riding, player " << pv(player.pos) << "\n";
     }
-    if (frame == 132) shot(2);
-    if (frame == 135) {
-        cubeMouseMove(to.x, to.y);
-        cubeMouseUp(to.x, to.y);
+    if (phase == 0 && currentCell != HUB_CELL) {
+        phase = 1; t0 = frame; testShift = false;
+        std::cout << "[test] train carried player to cell " << currentCell << " pos " << pv(player.pos) << " cleared " << roomCleared[currentCell] << "\n";
     }
-    if (frame == 170) {
-        glm::mat3 o = cubies[currentCell].orient;
-        std::cout << "[test] after snap dragMode " << dragMode << ", current cell pos " << cubies[currentCell].pos.x << ","
-                  << cubies[currentCell].pos.y << "," << cubies[currentCell].pos.z << " orient changed " << (o != glm::mat3(1.0f)) << "\n";
+    if (phase == 0 && frame > 2500) { std::cout << "[test] FAIL train ride timeout\n"; glfwSetWindowShouldClose(gWindow, true); }
+
+    if (phase == 1 && frame == t0 + 150) {
+        std::cout << "[test] room after 2.5s: wave " << wave << " enemies " << enemies.size() << " onGround " << player.onGround << " y " << player.pos.y << "\n";
+        aimAt(ROOM_C);
+        shot(2);
+        // 방 강제 클리어: 마지막 웨이브까지 진행된 것으로 하고 적을 모두 처치
+        wave = ROOM_WAVES;
+        for (auto& e : enemies) killEnemy(e, glm::vec3(0, 0, 1));
+        enemies.clear();
+    }
+    if (phase == 1 && frame == t0 + 160) {
+        std::cout << "[test] cleared " << roomCleared[currentCell] << " portals:";
+        for (const auto& D : FACE_DIRS) std::cout << " (" << pv(D) << ")->" << portalTarget(D);
+        std::cout << "\n";
+        // 열린 수평 포털 하나를 골라 그 앞 공중에서 포털에 줄을 건다
+        for (const auto& D : FACE_DIRS)
+            if (fabsf(D.y) < 0.5f && portalTarget(D) >= 0 && portalTarget(D) != HUB_CELL) { portalDir = D; break; }
+        player.pos = ROOM_C + portalDir * (ROOM_HALF - 10.0f) - glm::vec3(0, 1.5f, 0);
+        player.vel = glm::vec3(0.0f);
+        aimAt(ROOM_C + portalDir * ROOM_HALF);
+        shiftWasDown = false;
+        testShift = true;
+    }
+    if (phase == 1 && frame == t0 + 163) {
+        std::cout << "[test] portal grapple active " << grap.active << " onTrain " << grap.onTrain << " anchor " << pv(grap.anchor)
+                  << " target " << portalTarget(portalDir) << "\n";
         shot(3);
     }
-    if (frame == 172) {
-        glm::vec3 before = player.pos;
-        closeCubeView();
-        std::cout << "[test] world applied, player " << before.x << "," << before.y << "," << before.z << " -> "
-                  << player.pos.x << "," << player.pos.y << "," << player.pos.z << " anim " << rotAnimActive << "\n";
+    static int roomBefore = -1;
+    if (phase == 1 && frame == t0 + 159) roomBefore = currentCell;
+    if (phase == 1 && frame > t0 + 163 && currentCell != roomBefore) {
+        phase = 2; t0 = frame; testShift = false;
+        std::cout << "[test] portal carried player " << roomBefore << " -> " << currentCell << "\n";
     }
-    if (frame == 205) shot(4);
-    if (frame == 400) {
-        std::cout << "[test] after fall player y " << player.pos.y << " onGround " << player.onGround << " worldOrient==cube "
-                  << (worldOrient == cubies[currentCell].orient) << " boxes " << boxes.size() << "\n";
-        shot(5);
+    if (phase == 1 && frame > t0 + 600) { std::cout << "[test] FAIL portal timeout, player " << pv(player.pos) << "\n"; glfwSetWindowShouldClose(gWindow, true); }
+
+    if (phase == 2 && frame == t0 + 40) {
+        shot(4);
+        // 큐브 회전으로 포털 너머의 방이 바뀌는지: 지금 방은 그대로 두고 옆 칸이 있는 면을 돌린다
+        glm::ivec3 cur = cubies[currentCell].pos;
+        for (int ax = 0; ax < 3; ++ax) {
+            // 옆 칸이 회전축 위에 있으면 돌아도 제자리라 의미가 없다
+            if (cur[(ax + 1) % 3] == 0 && cur[(ax + 2) % 3] == 0) continue;
+            glm::vec3 D(0.0f);
+            D[ax] = cur[ax] < 1 ? 1.0f : -1.0f;
+            int before = portalTarget(D);
+            int layer = cur[ax] + (int)D[ax];   // 옆 칸이 속한 층. 지금 칸은 이 층에 없으므로 지금 방은 돌지 않는다
+            turnSlice(ax, layer, 1);
+            int after = portalTarget(D);
+            std::cout << "[test] turn axis " << ax << " layer " << layer << ": portal (" << pv(D) << ") " << before << " -> " << after
+                      << " current cell moved " << (cubies[currentCell].pos != cur) << "\n";
+            break;
+        }
     }
-    if (frame == 402) {     // 회전된 다른 칸(2번)으로 이동
-        openCubeView();
-        enterCell(2);
-        std::cout << "[test] entered cell " << currentCell << " rotated " << (worldOrient != glm::mat3(1.0f))
-                  << " player free " << spotIsFree(player.pos, 0.3f) << " y " << player.pos.y << "\n";
+    if (phase == 2 && frame == t0 + 45) {
+        restartRun();
+        std::cout << "[test] restart -> cell " << currentCell << " cleared rooms " << std::count(std::begin(roomCleared), std::end(roomCleared), true) << "\n";
     }
-    if (frame == 460) {
-        std::cout << "[test] new room player y " << player.pos.y << " onGround " << player.onGround << "\n";
-        shot(6);
-    }
-    if (frame == 462) {     // 큐브 초기화 후 돌아가면 월드도 원래 방향으로
-        openCubeView();
-        initCube();
-        closeCubeView();
-        std::cout << "[test] reset cube -> world identity " << (worldOrient == glm::mat3(1.0f)) << " anim " << rotAnimActive << "\n";
-    }
-    if (frame == 560) {
-        std::cout << "[test] done, anim " << rotAnimActive << "\n";
+    if (phase == 2 && frame == t0 + 60) {
+        std::cout << "[test] done\n";
         glfwSetWindowShouldClose(gWindow, true);
     }
 }
@@ -1861,6 +2350,7 @@ int main(int argc, char** argv) {
     sl.pointPos = U(sceneProg, "pointPos");
     sl.pointColor = U(sceneProg, "pointColor");
     sl.pointPower = U(sceneProg, "pointPower");
+    sl.alpha = U(sceneProg, "alpha");
     shadowModelLoc = U(shadowProg, "model");
     shadowVPLoc = U(shadowProg, "lightVP");
 
@@ -1878,16 +2368,15 @@ int main(int argc, char** argv) {
     glBindVertexArray(0);
 
     createShadowMap();
-    initCube();
     cubeViewQ = glm::angleAxis(0.5f, glm::vec3(1, 0, 0)) * glm::angleAxis(-0.6f, glm::vec3(0, 1, 0));
-    buildLocalWorld(currentCell);
-    rebuildWorld();
-    resetGame();
+    restartRun();
 
     std::cout << "=== Cube ===\n"
-              << "WASD 이동, Space 점프, Shift 달리기, 마우스 시점\n"
+              << "WASD 이동, Space 점프, Ctrl 달리기, 마우스 시점\n"
+              << "Shift 누르고 있기 = 줄 걸기(웹스윙). 달리는 기차에 걸면 매달려 다음 방으로\n"
               << "좌클릭 발사, 우클릭 유지 = 집중(시간 감속)\n"
-              << "R 재시작, ESC/Q 종료\n"
+              << "방을 깨면 벽 중앙의 포털이 열린다. 큐브를 돌리면 포털 너머의 방이 바뀐다\n"
+              << "R 처음부터, ESC/Q 종료\n"
               << "Tab 큐브 화면: 바깥 드래그 = 큐브 전체 회전, 칸 위 드래그 = 한 면 회전\n"
               << "               더블클릭/Enter = 그 칸으로 이동, R = 큐브 초기화, Tab = 돌아가며 회전 적용\n";
 

@@ -12,7 +12,8 @@ uniform vec3 objColor;
 uniform float Ks;
 uniform float shininess;
 uniform float emissive;
-uniform int pattern;                // 0 단색, 1 바닥 타일, 2 콘크리트 노이즈
+uniform int pattern;                // 0 단색, 1 바닥 타일, 2 콘크리트 노이즈, 3 유리 격자 벽
+uniform float alpha;                // 1 불투명, 1 미만은 반투명(포털 막)
 
 uniform vec3 sunDir;                // 표면 → 태양 방향
 uniform vec3 sunColor;
@@ -55,6 +56,17 @@ vec3 surface(vec3 base, vec3 N)
         vec2 p = abs(N.y) > 0.5 ? wPos.xz : (abs(N.x) > 0.5 ? wPos.zy : wPos.xy);
         float n = noise(p * 2.3) * 0.07 + noise(p * 9.0) * 0.035;
         return base * (1.0 - n);
+    }
+    if (pattern == 3) {
+        // 유리 격자: 큰 창틀(어두운 선) 안에 판유리마다 밝기가 조금씩 다르다
+        vec2 q = abs(N.y) > 0.5 ? wPos.xz : (abs(N.x) > 0.5 ? wPos.zy : wPos.xy);
+        vec2 g = q / 3.2;
+        vec2 f = abs(fract(g) - 0.5);
+        float mullion = smoothstep(0.43, 0.46, max(f.x, f.y));
+        float big = step(0.47, max(abs(fract(q / 12.8).x - 0.5), abs(fract(q / 12.8).y - 0.5)));
+        float pane = 0.82 + 0.28 * hash(floor(g)) + 0.1 * noise(q * 0.3);
+        vec3 glass = base * pane;
+        return mix(glass, vec3(0.16, 0.17, 0.2), max(mullion, big));
     }
     return base;
 }
@@ -104,6 +116,6 @@ void main()
     float fog = 1.0 - exp(-fogDensity * length(viewPos - wPos));
     col = mix(col, fogColor, fog);
 
-    outColor = vec4(col, 1.0);
+    outColor = vec4(col, alpha);
     outNormal = vec4(normalize(vNormalView) * 0.5 + 0.5, clamp(viewDepth / farPlane, 0.0, 0.998));
 }
