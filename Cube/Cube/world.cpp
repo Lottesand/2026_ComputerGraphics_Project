@@ -199,7 +199,19 @@ bool segmentBlocked(glm::vec3 p0, glm::vec3 p1, float* tOut) {
         float t;
         if (segAABB(p0, p1, b.bmin(), b.bmax(), t) && t < best) best = t;
     }
-    if (p1.y < 0.0f && p0.y >= 0.0f) best = std::min(best, p0.y / (p0.y - p1.y));
+    if (!spaceRoom() && p1.y < 0.0f && p0.y >= 0.0f) best = std::min(best, p0.y / (p0.y - p1.y));
+    // 행성: 선분과 구의 첫 교점
+    glm::vec3 d = p1 - p0;
+    float dd = glm::dot(d, d);
+    for (const auto& pl : planets) {
+        if (dd < 1e-10f) break;
+        glm::vec3 m = p0 - pl.c;
+        float b = glm::dot(m, d), c = glm::dot(m, m) - pl.r * pl.r, disc = b * b - dd * c;
+        if (disc < 0.0f) continue;
+        float t = (-b - sqrtf(disc)) / dd;
+        if (c < 0.0f) t = 0.0f;     // 이미 안쪽
+        if (t >= 0.0f && t < best) best = t;
+    }
     if (tOut) *tOut = best;
     return best <= 1.0f;
 }
@@ -231,7 +243,7 @@ bool circleOverlapsBoxXZ(glm::vec3 p, float r, const Box& b) {
 }
 
 float groundHeightAt(glm::vec3 p, float r) {
-    float ground = 0.0f;
+    float ground = spaceRoom() ? -1e9f : 0.0f;     // 우주 방은 바닥이 없다
     for (const auto& b : boxes) {
         if (!b.solid) continue;
         float top = b.bmax().y;
@@ -267,7 +279,9 @@ void buildLocalWorld(int cell) {
     localDecor.clear();
     localLights.clear();
     tracks.clear();
+    localPlanets.clear();
     if (cell == HUB_CELL) { buildHub(); return; }
+    if (cell == SPACE_CELL) { buildSpace(); return; }
     bool arena = cell == ARENA_CELL;
     const Theme& t = THEMES[arena ? 0 : cell % 6];
     std::mt19937 r(7919u * (unsigned)cell + 13u);
@@ -295,4 +309,6 @@ void rebuildWorld() {
         b.shellDir = worldOrient * b.shellDir;
         boxes.push_back(b);
     }
+    planets = localPlanets;
+    for (auto& p : planets) p.c = ROOM_C + worldOrient * (p.c - ROOM_C);
 }

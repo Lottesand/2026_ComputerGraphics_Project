@@ -2,7 +2,7 @@
 #include "cube.h"
 
 std::mt19937 rng(777);
-Mesh diskMesh;
+Mesh diskMesh, sphereMesh;
 
 float frand(float a, float b) { std::uniform_real_distribution<float> d(a, b); return d(rng); }
 
@@ -118,6 +118,21 @@ Mesh buildTetra() {
 }
 
 // 구멍(포털) 그리기용 원판: 반지름 1, +Z 를 향함
+// 반지름 1 구. 정점 법선 = 위치라 매끈하게 보인다
+Mesh buildSphere(int slices, int stacks) {
+    std::vector<float> d;
+    auto P = [&](int i, int j) {
+        float th = PI * j / stacks, ph = 2.0f * PI * i / slices;
+        return glm::vec3(sinf(th) * cosf(ph), cosf(th), sinf(th) * sinf(ph));
+    };
+    for (int j = 0; j < stacks; ++j)
+        for (int i = 0; i < slices; ++i) {
+            glm::vec3 a = P(i, j), b = P(i + 1, j), c = P(i + 1, j + 1), e = P(i, j + 1);
+            for (glm::vec3 p : { a, c, b, a, e, c }) pushVert(d, p, p);
+        }
+    return uploadMesh(d);
+}
+
 Mesh buildDisk(int segments) {
     std::vector<float> d;
     for (int i = 0; i < segments; ++i) {
