@@ -428,6 +428,68 @@ void shotScript(int frame, int w, int h) {
         cKeyUp();
         ck(transformItem == ITEM_CAPTAIN, "wheel equips");
         std::cout << "[test] cap: " << (capFail ? "FAIL" : "ok") << "\n";
+        // 욘두 화살: 2번째 처치 때 떨어지게 해 두고 두 마리 처치 → 바닥에 화살
+        enemies.clear(); bullets.clear();
+        arrowCount = 0;
+        scheduleArrowDrop(2);
+        addEnemy(glm::vec3(-10.0f, 0, 3.0f));
+        addEnemy(glm::vec3(-8.0f, 0, -3.0f));
+        damageEnemy(enemies[0], 1.0f, glm::vec3(1, 0, 0));
+        bool early = arrowPickupActive;
+        damageEnemy(enemies[1], 1.0f, glm::vec3(1, 0, 0));
+        std::cout << "[test] arrow drop after 1 kill " << early << " after 2 " << arrowPickupActive << " at " << pv(arrowPickupPos) << "\n";
+        ck(!early && arrowPickupActive, "arrow drops on scheduled kill");
+        player.pos = arrowPickupPos + glm::vec3(0.5f, 0, 0);     // 위로 걸어가면 자동으로 줍는다
+        player.vel = glm::vec3(0.0f);
+        step = 20; sf = frame;
+    }
+    static int arrowFrames = 0, straightFrames = 0;
+    static double arrowStart = 0.0;
+    static glm::vec3 prevDir(0.0f);
+    static float arcAngle = 0.0f, minLoop = 1e9f;   // 원 그리기 한 번에 돈 각도 (꽂기 전에 한 바퀴 다 돌았는지)
+    static int prevPhase = 0, loops = 0;
+    if (phase == 3 && step == 20 && frame == sf + 3) {
+        std::cout << "[test] arrow picked up count " << arrowCount << " pickup gone " << !arrowPickupActive << "\n";
+        ck(arrowCount == 1 && !arrowPickupActive, "arrow pickup into R slot");
+        enemies.clear();
+        for (glm::vec3 p : { glm::vec3(5, 0, 14), glm::vec3(14, 0, -6), glm::vec3(-6, 0, -18), glm::vec3(20, 0, 15), glm::vec3(0, 0, -5), glm::vec3(-18, 0, 16) }) addEnemy(p);
+        for (int k = 0; k < 6; k += 2) enemies[k].rusher = true;     // 절반은 플레이어에게 달려드는(움직이는) 적
+        player.pos = glm::vec3(-15.0f, 0, 0);
+        player.yaw = PI * 0.5f; player.pitch = 0.0f;
+        killsAt = kills;
+        useArrow();
+        ck(arrow.active && arrowCount == 0, "R uses arrow");
+        arrowStart = glfwGetTime();
+        arrowFrames = straightFrames = 0;
+        prevDir = arrow.dir;
+        arcAngle = 0.0f; minLoop = 1e9f; prevPhase = 0; loops = 0;
+        step = 21; sf = frame;
+    }
+    if (phase == 3 && step == 21) {
+        if (arrow.active) {
+            // 원 그리기(방향이 계속 바뀜)와 일직선 돌진(방향 고정)이 둘 다 나와야 한다
+            ++arrowFrames;
+            if (arrow.phase == 1 && glm::dot(prevDir, arrow.dir) > 0.99999f) ++straightFrames;
+            if (arrow.phase == 0) arcAngle += acosf(glm::clamp(glm::dot(prevDir, arrow.dir), -1.0f, 1.0f));
+            if (prevPhase == 0 && arrow.phase == 1) { minLoop = std::min(minLoop, arcAngle); ++loops; arcAngle = 0.0f; }
+            if (arrow.phase == 0 && prevPhase == 1) arcAngle = 0.0f;
+            prevPhase = arrow.phase;
+            prevDir = arrow.dir;
+            if (arrowFrames == 60) { aimAt(arrow.pos); shot(46); }
+        }
+        if (!arrow.active || timedOut(3000, "arrow ends")) {
+            double dur = glfwGetTime() - arrowStart;
+            int movers = 0;
+            for (const auto& e : enemies) movers += e.alive && e.rusher;
+            std::cout << "[test] arrow loops before dash " << loops << " smallest loop " << minLoop * 180.0f / PI << " deg\n";
+            ck(loops > 0 && minLoop > 6.0f, "full circle before each dash");
+            std::cout << "[test] arrow flew " << dur << "s kills " << kills - killsAt << "/6 (moving left " << movers << ") straight dash frames " << straightFrames << "/" << arrowFrames << "\n";
+            ck(dur > 4.0 && dur < 6.5 && kills - killsAt >= 5 && movers == 0 && straightFrames > 0 && straightFrames < arrowFrames, "arrow arcs, locks, dashes, hits moving enemies");
+            std::cout << "[test] arrow: " << (capFail ? "FAIL" : "ok") << "\n";
+            step = 22; sf = frame;
+        }
+    }
+    if (phase == 3 && step == 22) {
         restartRun();
         std::cout << "[test] restart -> cell " << currentCell << " cleared rooms " << std::count(std::begin(roomCleared), std::end(roomCleared), true)
                   << " transform " << transformItem << " items " << (invSlots[0] >= 0) << "\n";

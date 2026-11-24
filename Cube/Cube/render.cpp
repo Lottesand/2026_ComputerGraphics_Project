@@ -291,6 +291,35 @@ void drawEncounterItem() {
     drawPart(TRS(encounterPos + glm::vec3(0, 20.0f, 0), glm::vec3(0.12f, 40.0f, 0.12f)), beam);
 }
 
+// 욘두 화살: 붉게 빛나는 가는 화살 + 가늘어지며 사라지는 긴 꼬리. 바닥에 떨어진 것은 떠서 돈다
+static void drawArrowModel(const glm::mat4& M, float glow) {
+    Material shaft{ glm::vec3(1.0f, 0.12f, 0.06f), 0.0f, 1.0f, glow, 0 };
+    Material fin{ glm::vec3(0.35f, 0.04f, 0.03f), 0.5f, 32.0f, glow * 0.25f, 0 };
+    drawPart(M * TRS({ 0, 0, 0 }, { 0.05f, 0.05f, 1.0f }), shaft);
+    drawPart(M * TRS({ 0, 0, 0.55f }, { 0.12f, 0.12f, 0.16f }), shaft);           // 촉
+    drawPart(M * TRS({ 0, 0, -0.45f }, { 0.22f, 0.02f, 0.14f }), fin);            // 깃
+    drawPart(M * TRS({ 0, 0, -0.45f }, { 0.02f, 0.22f, 0.14f }), fin);
+}
+
+void drawYonduArrow() {
+    if (arrowPickupActive) {
+        glm::vec3 c = arrowPickupPos + glm::vec3(0, 0.9f + 0.15f * sinf(globalTime * 3.0f), 0);
+        drawArrowModel(glm::translate(glm::mat4(1.0f), c) * glm::rotate(glm::mat4(1.0f), globalTime * 2.0f, glm::vec3(0, 1, 0)) *
+                       glm::rotate(glm::mat4(1.0f), 0.5f, glm::vec3(1, 0, 0)), 3.0f);
+    }
+    if (!arrow.active || shadowPass) return;
+    drawArrowModel(glm::translate(glm::mat4(1.0f), arrow.pos) * orientTo(arrow.dir), 6.0f);
+    for (size_t i = 0; i + 1 < arrow.trail.size(); ++i) {
+        glm::vec3 a = arrow.trail[i], b = arrow.trail[i + 1], d = a - b;
+        float L = glm::length(d);
+        if (L < 1e-3f) continue;
+        float k = 1.0f - (float)i / arrow.trail.size();       // 1 → 0 (꼬리 끝으로 갈수록 가늘고 어둡게)
+        Material tm{ glm::vec3(1.0f, 0.15f + 0.3f * k, 0.08f), 0.0f, 1.0f, 0.6f + 4.0f * k * k, 0 };
+        float th = 0.03f + 0.07f * k;
+        drawMesh(cubeMesh, glm::translate(glm::mat4(1.0f), b + d * 0.5f) * orientTo(d) * glm::scale(glm::mat4(1.0f), glm::vec3(th, th, L + 0.02f)), tm);
+    }
+}
+
 // 방을 깨면 나오는 증강 물체: 받침대 + 떠서 도는 금빛 결정 + 주위를 도는 작은 조각 4개
 void drawAugmentPickup() {
     if (!augPickupActive) return;
@@ -327,6 +356,7 @@ void drawWorld(bool withEffects) {
     drawHoles();
     drawAugmentPickup();
     drawEncounterItem();
+    drawYonduArrow();
     // 던진 방패: 원반처럼 눕혀서 돈다
     if (transformItem == ITEM_CAPTAIN && cap.shield != SH_HELD)
         drawCapShield(glm::translate(glm::mat4(1.0f), cap.sPos) * orientTo(glm::vec3(0, 1, 0)) *
@@ -377,6 +407,8 @@ void uploadLights(glm::vec3 eye) {
         for (int i = 0; i < tracks[k].cars; ++i)
             if (carVisible(tracks[k], carS(tracks[k], i)))
                 cand.push_back({ glm::vec3(carWorld(k, i)[3]), glm::vec3(1.0f, 0.72f, 0.42f) * 1.6f, 10.0f });
+    if (arrow.active) cand.push_back({ arrow.pos, glm::vec3(1.0f, 0.15f, 0.08f) * 3.0f, 9.0f });
+    if (arrowPickupActive) cand.push_back({ arrowPickupPos + glm::vec3(0, 1.0f, 0), glm::vec3(1.0f, 0.15f, 0.08f) * 2.0f, 6.0f });
     if (encounterPlaced) cand.push_back({ encounterPos + glm::vec3(0, 1.6f, 0), glm::vec3(1.0f, 0.25f, 0.9f) * 3.0f, 11.0f });
     if (augPickupActive) cand.push_back({ augPickupPos + glm::vec3(0, 1.8f, 0), glm::vec3(1.0f, 0.78f, 0.35f) * 3.0f, 9.0f });
     int n = std::min((int)cand.size(), MAX_LIGHTS);

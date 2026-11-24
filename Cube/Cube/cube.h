@@ -100,6 +100,7 @@ struct Enemy {
     bool alive;
     bool rusher;            // 근접형: 총 대신 달려와서 내려친다
     float hp;               // 기본 1. 총알·방패는 1, 방패 없는 맨손은 0.5
+    glm::vec3 vel;          // 지난 프레임에 움직인 속도 (욘두 화살이 앞질러 겨눌 때)
     float atkT, atkCd;      // 내려치기 준비 남은 시간(팔을 든 상태), 다음 공격까지
 };
 
@@ -468,6 +469,23 @@ extern const int GUARD_MAX;
 extern const float E_COOLDOWN, Q_COOLDOWN;
 extern Mesh starMesh;
 
+// 욘두 화살 (R 칸 소모품)
+struct Arrow {
+    bool active = false;
+    float t = 0.0f;                 // 남은 시간
+    glm::vec3 pos{ 0.0f }, dir{ 0, 0, -1 }, curlAxis{ 0, 1, 0 };
+    int kills = 0;
+    int phase = 0;                  // 0 원 그리기, 1 표적으로 일직선 돌진
+    float phaseT = 0.0f, dashLeft = 0.0f;
+    std::vector<glm::vec3> trail;   // 꼬리 (최근 위치, 앞이 최신)
+};
+extern int arrowCount;
+extern bool arrowPickupActive;
+extern glm::vec3 arrowPickupPos;
+extern Arrow arrow;
+extern const int ARROW_MAX;
+extern const float ARROW_TIME;
+
 extern Stats stats;
 extern std::vector<Augment> augments;
 extern std::vector<int> ownedAugments;
@@ -503,6 +521,13 @@ void onEnterRoomTransform();
 void damageEnemy(Enemy& e, float dmg, glm::vec3 hitDir);
 Mesh buildStar();
 void drawCapShield(const glm::mat4& M);
+void resetItems();
+void onEnterRoomItems();
+void scheduleArrowDrop(int atKill);
+void onEnemyKilledItems(glm::vec3 pos);
+void debugGiveArrow();
+void useArrow();
+void updateArrow(float dt);
 void initAugments();
 void resetAugments();
 int augLineTier(int line);

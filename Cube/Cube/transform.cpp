@@ -19,7 +19,7 @@ glm::vec3 slideVel(0.0f);
 bool testGuard = false;
 
 const int GUARD_MAX = 6;            // 이만큼 막으면 가드가 깨진다
-const float GUARD_TIME = 3.0f, E_COOLDOWN = 4.0f, Q_COOLDOWN = 8.0f;
+const float GUARD_TIME = 3.0f, E_COOLDOWN = 1.0f, Q_COOLDOWN = 8.0f;
 const float SHIELD_SPEED = 42.0f, THROW_RANGE = 48.0f;
 const int RICO_BOUNCES = 12;
 

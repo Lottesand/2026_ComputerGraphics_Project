@@ -177,6 +177,7 @@ void travelTo(int id, glm::vec3 D, bool viaTrain) {
     portalArmed = false;
     placeAugmentPickup();
     onEnterRoomTransform();
+    onEnterRoomItems();
     bannerText = (id == HUB_CELL ? std::string("HUB") : "ROOM " + std::to_string(id)) + " - " + styleName(styleForCell(id));
     bannerT = 2.5f;
 }
@@ -184,6 +185,7 @@ void travelTo(int id, glm::vec3 D, bool viaTrain) {
 void restartRun() {
     resetAugments();
     resetTransform();
+    resetItems();
     initCube();
     for (bool& c : roomCleared) c = false;
     roomCleared[HUB_CELL] = true;
@@ -289,6 +291,7 @@ glm::vec3 enemyMuzzle(const Enemy& e) {
 void killEnemy(Enemy& e, glm::vec3 hitDir) {
     e.alive = false;
     ++kills;
+    onEnemyKilledItems(e.pos);
     if (stats.killsPerHeal > 0 && kills % stats.killsPerHeal == 0) player.hp = std::min(stats.maxHp, player.hp + 1);
     EnemyRig r = enemyRig(e);
     for (int i = 0; i < 46; ++i) {
@@ -501,6 +504,8 @@ void updateEnemies(float dt) {
     int enemyBullets = 0;
     for (const auto& b : bullets) enemyBullets += b.alive && !b.fromPlayer;
     glm::vec3 head = player.pos + glm::vec3(0, 1.45f, 0);
+    std::vector<glm::vec3> before(enemies.size());
+    for (size_t i = 0; i < enemies.size(); ++i) before[i] = enemies[i].pos;
     for (auto& e : enemies) {
         if (!e.alive) continue;
         if (e.spawnT < 1.0f) { e.spawnT += dt * 0.8f; continue; }
@@ -583,6 +588,7 @@ void updateEnemies(float dt) {
                 b.pos += push;
             }
         }
+    for (size_t i = 0; i < before.size(); ++i) enemies[i].vel = dt > 1e-5f ? (enemies[i].pos - before[i]) / dt : glm::vec3(0.0f);
     enemies.erase(std::remove_if(enemies.begin(), enemies.end(), [](const Enemy& e) { return !e.alive; }), enemies.end());
 }
 
@@ -688,6 +694,7 @@ void update(float realDt) {
     trainTime += worldDt;
     updatePlayer(playerDt);
     updateShield(playerDt);
+    updateArrow(worldDt);
     updateWheel();
     encounterBannerT -= realDt;
     updatePortals();

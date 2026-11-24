@@ -153,6 +153,7 @@
     <ClCompile Include="hub.cpp" />
     <ClCompile Include="augments.cpp" />
     <ClCompile Include="transform.cpp" />
+    <ClCompile Include="items.cpp" />
     <ClCompile Include="game.cpp" />
     <ClCompile Include="cubeview.cpp" />
     <ClCompile Include="render.cpp" />

@@ -25,7 +25,12 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
         return;
     }
     if (key == GLFW_KEY_ESCAPE) glfwSetWindowShouldClose(window, true);
-    else if (key == GLFW_KEY_R) restartRun();
+    else if (key == GLFW_KEY_R) {
+        // R = 소모품(욘두 화살). 죽었을 때는 다시 하기, Shift + R 은 언제든 처음부터
+        if (player.dead || (mods & GLFW_MOD_SHIFT)) restartRun();
+        else useArrow();
+    }
+    else if (key == GLFW_KEY_2 && (mods & GLFW_MOD_SHIFT)) debugGiveArrow();     // 디버그: 욘두 화살 +1
     else if (key == GLFW_KEY_F) tryInteract();
     else if (key == GLFW_KEY_1 && (mods & GLFW_MOD_SHIFT)) debugGiveItem(ITEM_CAPTAIN);   // 디버그: 캡틴 방패 지급
     else if (key == GLFW_KEY_C) cKeyDown();
@@ -191,7 +196,7 @@ int main(int argc, char** argv) {
               << "방을 깨면 벽 중앙의 포털이 열린다. 큐브를 돌리면 포털 너머의 방이 바뀐다\n"
               << "F 상호작용(증강, 이상 현상), C 짧게 = 첫 변신 아이템 / 꾹 = 휠, Z 변신 해제\n"
               << "캡틴: 좌클릭 근접, 우클릭 가드(반사), E 방패 던지기/회수, Q 튕기기, Shift 달리기 + 착지 슬라이드\n"
-              << "R 처음부터, ESC 종료\n"
+              << "R 소모품(욘두 화살) 사용, 죽었을 때 R 다시 하기, Shift+R 처음부터, ESC 종료\n"
               << "Tab 큐브 화면: 바깥 드래그 = 큐브 전체 회전, 칸 위 드래그 = 한 면 회전\n"
               << "               더블클릭/Enter = 그 칸으로 이동, R = 큐브 초기화, Tab = 돌아가며 회전 적용\n";
 

@@ -178,6 +178,18 @@ void renderHUD(int w, int h) {
         drawTextCentered(b, cx, by + bh + 6 * ui, 1.6f * ui, "BULLET TIME [SHIFT]", glm::vec4(cyan.r, cyan.g, cyan.b, 0.8f));
     }
 
+    // R 칸 (소모품): 체력 칸 위
+    {
+        float sx = 24 * ui, sy = 54 * ui, ss = 30 * ui;
+        bool has = arrowCount > 0 || arrow.active;
+        glm::vec4 rc(1.0f, 0.25f, 0.15f, 1.0f);
+        b.rect(sx - 2 * ui, sy - 2 * ui, ss + 4 * ui, ss + 4 * ui, has ? rc : glm::vec4(1, 1, 1, 0.25f));
+        b.rect(sx, sy, ss, ss, glm::vec4(0.05f, 0.05f, 0.07f, 0.85f));
+        drawText(b, sx + 9 * ui, sy + 9 * ui, 2.0f * ui, "R", has ? rc : glm::vec4(1, 1, 1, 0.35f));
+        std::string rs = arrow.active ? "YONDU ARROW " + std::to_string((int)ceilf(arrow.t)) + "S"
+                       : (arrowCount > 0 ? "YONDU ARROW X" + std::to_string(arrowCount) : "EMPTY");
+        drawText(b, sx + ss + 10 * ui, sy + 11 * ui, 1.5f * ui, rs, has ? rc : glm::vec4(1, 1, 1, 0.35f));
+    }
     for (int i = 0; i < stats.maxHp; ++i)
         b.rect((24 + i * 22) * ui, 28 * ui, 16 * ui, 16 * ui, i < player.hp ? orange : glm::vec4(0, 0, 0, 0.4f));
 
@@ -202,7 +214,7 @@ void renderHUD(int w, int h) {
     } else if (helpT > 0.0f) {
         glm::vec4 hc(1, 1, 1, std::min(1.0f, helpT) * 0.85f);
         drawTextCentered(b, cx, h * 0.26f, 1.7f * ui, "WASD MOVE   SPACE JUMP   CTRL SPRINT   HOLD RMB WEB SWING", hc);
-        drawTextCentered(b, cx, h * 0.26f - 20 * ui, 1.7f * ui, "LMB SHOOT   HOLD SHIFT BULLET TIME   R RESTART", hc);
+        drawTextCentered(b, cx, h * 0.26f - 20 * ui, 1.7f * ui, "LMB SHOOT   HOLD SHIFT BULLET TIME   R ITEM   SHIFT+R RESTART", hc);
     }
     if (player.dead) {
         drawTextCentered(b, cx, h * 0.55f, 6.0f * ui, "YOU WERE HIT", glm::vec4(1, 0.25f, 0.2f, 1));
