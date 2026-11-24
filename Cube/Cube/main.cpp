@@ -27,6 +27,7 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     if (key == GLFW_KEY_ESCAPE) glfwSetWindowShouldClose(window, true);
     else if (key == GLFW_KEY_R) restartRun();
     else if (key == GLFW_KEY_F) tryInteract();
+    else if (key == GLFW_KEY_1 && (mods & GLFW_MOD_SHIFT)) debugGiveItem(ITEM_CAPTAIN);   // 디버그: 캡틴 방패 지급
     else if (key == GLFW_KEY_C) cKeyDown();
     else if (key == GLFW_KEY_Z) revertTransform();
     else if (key == GLFW_KEY_E) capKeyE();

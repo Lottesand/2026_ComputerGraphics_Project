@@ -485,6 +485,7 @@ void maybeStartEncounter();
 bool nearEncounter();
 void collectEncounter();
 void equipItem(int item);
+void debugGiveItem(int item);
 void revertTransform();
 void equipFirstItem();
 void cKeyDown();

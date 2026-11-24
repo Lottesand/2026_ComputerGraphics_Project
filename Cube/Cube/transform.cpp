@@ -83,6 +83,17 @@ void collectEncounter() {
     encounterPlaced = false;
 }
 
+// 디버그 (Shift + 1): 아이템을 바로 인벤토리에 넣는다. 이미 있으면 그대로, 그 아이템 인카운터가 떠 있으면 지운다
+void debugGiveItem(int item) {
+    for (int s : invSlots) if (s == item) return;
+    for (int& s : invSlots)
+        if (s < 0) { s = item; break; }
+    itemObtained[item] = true;
+    if (encounterItem == item) { encounterCell = encounterItem = -1; encounterPlaced = false; }
+    bannerText = std::string("DEBUG - ") + ITEM_NAMES[item] + " ADDED   [C] TRANSFORM";
+    bannerT = 2.5f;
+}
+
 // ---------------- 변신과 인벤토리 휠 ----------------
 void equipItem(int item) {
     if (item < 0 || item == transformItem) return;

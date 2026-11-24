@@ -209,7 +209,9 @@ void shotScript(int frame, int w, int h) {
         aimAt(ROOM_C);
         shot(2);
         // 물량: 웨이브 하나에 12 + 18 마리가 실제로 빈 자리를 찾아 나오는지
-        int before = (int)enemies.size();
+        enemies.clear();
+        wave = 0;           // 이미 첫 웨이브가 저절로 나왔을 수 있으므로 처음부터
+        int before = 0;
         while (wave < 2) spawnWave();
         int spawned = (int)enemies.size() - before;
         std::cout << "[test] waves 1-2 spawned " << spawned << " (expect up to 30)" << (spawned >= 24 ? "" : " FAIL") << "\n";
@@ -429,6 +431,10 @@ void shotScript(int frame, int w, int h) {
         restartRun();
         std::cout << "[test] restart -> cell " << currentCell << " cleared rooms " << std::count(std::begin(roomCleared), std::end(roomCleared), true)
                   << " transform " << transformItem << " items " << (invSlots[0] >= 0) << "\n";
+        debugGiveItem(ITEM_CAPTAIN); debugGiveItem(ITEM_CAPTAIN);   // 디버그 키(Shift+1): 두 번 눌러도 한 칸만
+        int nCap = 0;
+        for (int s : invSlots) nCap += s == ITEM_CAPTAIN;
+        std::cout << "[test] debug give captain slots " << nCap << (nCap == 1 && invSlots[0] == ITEM_CAPTAIN ? "" : " FAIL") << "\n";
         step = 10; sf = frame;
     }
     if (phase == 3 && step == 10 && frame == sf + 15) {
