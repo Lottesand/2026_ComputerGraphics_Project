@@ -107,6 +107,13 @@ float shadowFactor(vec3 N, vec3 L)
     return s / 9.0;
 }
 
+// 방마다 다른 렌더 스타일 (render.cpp 의 RenderStyle 과 같은 번호)
+uniform int style;
+const int ST_REAL = 0, ST_MINIMAL = 1, ST_TOON = 2, ST_PIXEL = 3, ST_NOIR = 4, ST_NEON = 5, ST_BLUEPRINT = 6;
+
+// 툰: 빛을 3단계로 끊는다
+float band(float x) { return x > 0.55 ? 1.0 : (x > 0.18 ? 0.55 : 0.18); }
+
 void main()
 {
     vec3 N = normalize(wNormal);
@@ -114,7 +121,8 @@ void main()
     vec3 V = normalize(viewPos - wPos);
     vec3 base;
     float specMask = 1.0;
-    if (texLayer >= 0) {
+    bool useTex = texLayer >= 0 && style != ST_BLUEPRINT;
+    if (useTex) {
         vec3 an = abs(oNormal);
         vec2 uv = an.y > 0.5 ? oPos.xz : (an.x > 0.5 ? oPos.zy : oPos.xy);
         vec2 sz = an.y > 0.5 ? objScale.xz : (an.x > 0.5 ? objScale.zy : objScale.xy);
@@ -126,6 +134,8 @@ void main()
     } else {
         base = surface(objColor, N);
     }
+    if (style == ST_TOON) base = mix(objColor, base, 0.3) * 1.1;            // 무늬는 약하게, 색은 선명하게
+    if (style == ST_BLUEPRINT) base = vec3(0.75);
     float ks = Ks * specMask;
 
     float sh = shadowFactor(N, L);
@@ -133,10 +143,25 @@ void main()
     vec3 amb = mix(groundAmb, skyAmb, N.y * 0.5 + 0.5);     // 반구 주변광
     vec3 R = reflect(-L, N);
     float spec = NdotL > 0.0 ? pow(max(dot(V, R), 0.0), shininess) * ks : 0.0;
+    float diff = NdotL * sh;
+    float fres = pow(1.0 - max(dot(N, V), 0.0), 5.0);
 
-    vec3 col = base * (amb + sunColor * NdotL * sh) + sunColor * spec * sh;
-    float fres = pow(1.0 - max(dot(N, V), 0.0), 4.0) * ks * 0.4;
-    col += skyAmb * fres;
+    if (style == ST_TOON) {
+        diff = band(diff);
+        spec = step(0.5, spec) * 0.6;
+    }
+    if (style == ST_REAL) {
+        // 실사풍: 슐릭 프레넬로 스치는 각도에서 반사가 강해지고, 반사광은 에너지 보존 쪽으로 정규화
+        float f0 = mix(0.04, 0.6, clamp(ks, 0.0, 1.0));
+        float F = f0 + (1.0 - f0) * fres;
+        vec3 H = normalize(L + V);
+        float nh = max(dot(N, H), 0.0);
+        spec = NdotL > 0.0 ? pow(nh, shininess * 2.0) * (shininess + 8.0) / 25.0 * F : 0.0;
+        amb *= 0.85 + 0.3 * F;
+    }
+
+    vec3 col = base * (amb + sunColor * diff) + sunColor * spec * sh;
+    col += skyAmb * fres * ks * (style == ST_REAL ? 0.9 : 0.4);
 
     // 점광원: Phong(확산 + 반사) + 거리 감쇠. 범위 끝에서 부드럽게 0 이 되도록
     for (int i = 0; i < numLights; ++i) {
@@ -148,6 +173,7 @@ void main()
         float att = fall * fall / (1.0 + 0.05 * d * d);
         float nl = max(dot(N, Lp), 0.0);
         float sp = nl > 0.0 ? pow(max(dot(V, reflect(-Lp, N)), 0.0), shininess) * ks : 0.0;
+        if (style == ST_TOON) { nl = band(nl * att * 3.0) / max(att * 3.0, 0.001); sp = step(0.5, sp) * 0.6; }
         col += (base * nl + sp) * lightCol[i] * att;
     }
 
@@ -158,10 +184,24 @@ void main()
         col += base * pointColor * max(dot(N, lv / d), 0.0) * a;
     }
 
-    col += objColor * emissive;
+    float emis = emissive;
+    if (style == ST_NEON) {
+        // 네온: 표면은 거의 검게, 물체 공간 격자선과 발광체만 빛난다 (높이에 따라 자홍 → 청록)
+        col *= 0.12;
+        vec3 an = abs(oNormal);
+        vec2 q = an.y > 0.5 ? oPos.xz : (an.x > 0.5 ? oPos.zy : oPos.xy);
+        vec2 g = abs(fract(q / 2.0) - 0.5);
+        float line = smoothstep(0.46, 0.49, max(g.x, g.y));
+        vec3 neon = mix(vec3(1.0, 0.15, 0.85), vec3(0.1, 0.95, 1.0), clamp(wPos.y / 40.0, 0.0, 1.0));
+        col += neon * line * 1.4;
+        emis *= 2.5;
+    }
+    col += objColor * emis;
 
-    float fog = 1.0 - exp(-fogDensity * length(viewPos - wPos));
-    col = mix(col, fogColor, fog);
+    float fogD = fogDensity * (style == ST_NOIR ? 1.6 : (style == ST_NEON ? 0.5 : 1.0));
+    vec3 fogC = style == ST_NEON ? vec3(0.02, 0.0, 0.05) : fogColor;
+    float fog = 1.0 - exp(-fogD * length(viewPos - wPos));
+    col = mix(col, fogC, fog);
 
     outColor = vec4(col, alpha);
     outNormal = vec4(normalize(vNormalView) * 0.5 + 0.5, clamp(viewDepth / farPlane, 0.0, 0.998));

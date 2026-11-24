@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -147,6 +147,18 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="util.cpp" />
+    <ClCompile Include="textures.cpp" />
+    <ClCompile Include="world.cpp" />
+    <ClCompile Include="hub.cpp" />
+    <ClCompile Include="game.cpp" />
+    <ClCompile Include="cubeview.cpp" />
+    <ClCompile Include="render.cpp" />
+    <ClCompile Include="hud.cpp" />
+    <ClCompile Include="tests.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="cube.h" />
   </ItemGroup>
   <ItemGroup>
   </ItemGroup>
