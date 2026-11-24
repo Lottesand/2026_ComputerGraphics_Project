@@ -427,3 +427,7 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# 테스트/측정 출력
+shot_*.ppm
+bench_*.txt

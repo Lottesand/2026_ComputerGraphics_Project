@@ -21,6 +21,9 @@
 #include <cmath>
 #include <algorithm>
 #include <random>
+#include <thread>
+#include <numeric>
+#include <cstdint>
 
 const float PI = 3.1415926535f;
 const float FAR_PLANE = 200.0f;
@@ -164,12 +167,149 @@ Mesh buildTetra() {
 }
 
 // ===================================================================
+// 텍스처: 이미지 파일 없이 코드로 그린 512x512 이미지 6장을 텍스처 배열 한 개에 올린다
+//   RGB = 색(재질 색에 곱함), A = 반사(스펙큘러) 세기
+// ===================================================================
+enum TexLayer { TEX_CONCRETE = 0, TEX_TILE, TEX_GLASS, TEX_METAL, TEX_PANEL, TEX_CRATE, TEX_COUNT };
+const int TEX_SIZE = 512;
+GLuint albedoArray = 0;
+
+float thash(int x, int y, int seed) {
+    uint32_t h = (uint32_t)x * 374761393u + (uint32_t)y * 668265263u + (uint32_t)seed * 2246822519u;
+    h = (h ^ (h >> 13)) * 1274126177u;
+    return (float)((h ^ (h >> 16)) & 0xFFFFFF) / 16777215.0f;
+}
+
+// 타일링되는 값 노이즈 (period 칸마다 반복 → 텍스처 경계가 이어진다)
+float tnoise(float x, float y, int period, int seed) {
+    int x0 = (int)floorf(x), y0 = (int)floorf(y);
+    float fx = x - x0, fy = y - y0;
+    fx = fx * fx * (3 - 2 * fx);
+    fy = fy * fy * (3 - 2 * fy);
+    auto h = [&](int a, int b) { return thash(((a % period) + period) % period, ((b % period) + period) % period, seed); };
+    float a = h(x0, y0) + (h(x0 + 1, y0) - h(x0, y0)) * fx;
+    float b = h(x0, y0 + 1) + (h(x0 + 1, y0 + 1) - h(x0, y0 + 1)) * fx;
+    return a + (b - a) * fy;
+}
+
+float tfbm(float u, float v, int baseFreq, int seed) {
+    float s = 0.0f, amp = 0.5f;
+    for (int o = 0; o < 5; ++o) {
+        int f = baseFreq << o;
+        s += amp * tnoise(u * f, v * f, f, seed + o * 17);
+        amp *= 0.5f;
+    }
+    return s;
+}
+
+// 격자선까지의 거리 (0~0.5). 홈·줄눈을 그릴 때 쓴다
+float gridDist(float u, int cells) { float f = u * cells; return fabsf(f - floorf(f) - 0.5f); }
+
+glm::vec4 texel(int layer, float u, float v) {
+    float n = tfbm(u, v, 8, layer * 101);
+    float fine = tfbm(u, v, 64, layer * 131 + 7);
+    switch (layer) {
+    case TEX_CONCRETE: {
+        // 거푸집 판 자국 + 폼타이 구멍 + 세로 얼룩
+        float seam = std::min(gridDist(u, 2), gridDist(v, 4));
+        float g = 0.78f + 0.22f * n + 0.08f * fine;
+        if (seam > 0.485f) g *= 0.72f;
+        float hx = u * 4.0f - floorf(u * 4.0f) - 0.5f, hy = v * 8.0f - floorf(v * 8.0f) - 0.5f;
+        if (hx * hx + hy * hy < 0.004f) g *= 0.45f;
+        g *= 1.0f - 0.12f * tnoise(u * 32.0f, v * 2.0f, 32, 99) * tnoise(u * 32.0f, v * 2.0f, 32, 98);
+        return glm::vec4(g, g, g * 0.98f, 0.15f);
+    }
+    case TEX_TILE: {
+        // 바닥 타일 4x4, 줄눈, 타일마다 다른 밝기와 닳은 자국
+        float d = std::max(gridDist(u, 4), gridDist(v, 4));
+        int tx = (int)(u * 4), ty = (int)(v * 4);
+        float t = 0.86f + 0.12f * thash(tx, ty, 5) + 0.06f * fine - 0.1f * std::max(0.0f, n - 0.55f);
+        if (d > 0.47f) return glm::vec4(0.32f, 0.32f, 0.33f, 0.05f);
+        return glm::vec4(t, t, t * 1.01f, 0.75f);
+    }
+    case TEX_GLASS: {
+        // 판유리 2x2 + 창틀. 위로 갈수록 밝은 반사, 유리마다 다른 색조, 먼지
+        float d = std::max(gridDist(u, 2), gridDist(v, 2));
+        if (d > 0.465f) return glm::vec4(0.2f, 0.21f, 0.24f, 0.4f);
+        int px = (int)(u * 2), py = (int)(v * 2);
+        float fv = v * 2 - py;
+        float refl = 0.7f + 0.35f * fv + 0.15f * thash(px, py, 3) + 0.08f * n;
+        float streak = 0.08f * tnoise(u * 40.0f, v * 3.0f, 40, 55);
+        return glm::vec4(refl * 0.92f - streak, refl * 0.97f - streak, refl * 1.05f - streak, 1.0f);
+    }
+    case TEX_METAL: {
+        // 열차 외판: 가로 헤어라인 + 세로 패널 이음매 + 리벳
+        float brushed = 0.85f + 0.1f * tnoise(u * 4.0f, v * 160.0f, 4, 31) + 0.05f * n;
+        float seam = gridDist(u, 4);
+        if (seam > 0.49f) brushed *= 0.55f;
+        float rx = u * 16.0f - floorf(u * 16.0f) - 0.5f, ry = v * 2.0f - floorf(v * 2.0f) - 0.5f;
+        if (fabsf(ry) > 0.44f && rx * rx < 0.01f) brushed *= 1.15f;
+        return glm::vec4(brushed, brushed * 1.01f, brushed * 1.04f, 0.95f);
+    }
+    case TEX_PANEL: {
+        // 방 벽: 크고 작은 금속 패널, 테두리 홈, 모서리 볼트
+        float big = std::max(gridDist(u, 2), gridDist(v, 2));
+        float small = std::max(gridDist(u, 4), gridDist(v, 8));
+        float g = 0.82f + 0.12f * n + 0.05f * fine;
+        if (big > 0.485f) g *= 0.5f;
+        else if (small > 0.49f) g *= 0.8f;
+        float bx = u * 2 - floorf(u * 2), by = v * 2 - floorf(v * 2);
+        for (float cx : { 0.06f, 0.94f })
+            for (float cy : { 0.06f, 0.94f })
+                if ((bx - cx) * (bx - cx) + (by - cy) * (by - cy) < 0.0006f) g *= 0.55f;
+        return glm::vec4(g, g, g, 0.45f);
+    }
+    default: {
+        // 상자: 테두리 틀 + 가로 판자
+        float edge = std::max(fabsf(u - 0.5f), fabsf(v - 0.5f));
+        float plank = gridDist(v, 5);
+        float g = 0.8f + 0.15f * tnoise(u * 6.0f, v * 60.0f, 6, 71) + 0.08f * n;
+        if (edge > 0.42f) g *= 0.75f;
+        else if (plank > 0.48f) g *= 0.6f;
+        return glm::vec4(g, g * 0.97f, g * 0.94f, 0.2f);
+    }
+    }
+}
+
+void createTextures() {
+    std::vector<uint8_t> px((size_t)TEX_SIZE * TEX_SIZE * 4 * TEX_COUNT);
+    // 층마다 스레드 하나씩 (이미지 생성은 CPU 작업이라 나눠서 빠르게)
+    std::vector<std::thread> workers;
+    for (int layer = 0; layer < TEX_COUNT; ++layer)
+        workers.emplace_back([&px, layer]() {
+            for (int y = 0; y < TEX_SIZE; ++y)
+                for (int x = 0; x < TEX_SIZE; ++x) {
+                    glm::vec4 c = glm::clamp(texel(layer, (x + 0.5f) / TEX_SIZE, (y + 0.5f) / TEX_SIZE), 0.0f, 1.0f);
+                    uint8_t* p = &px[(((size_t)layer * TEX_SIZE + y) * TEX_SIZE + x) * 4];
+                    for (int k = 0; k < 4; ++k) p[k] = (uint8_t)(c[k] * 255.0f + 0.5f);
+                }
+        });
+    for (auto& w : workers) w.join();
+
+    glGenTextures(1, &albedoArray);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, albedoArray);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, TEX_SIZE, TEX_SIZE, TEX_COUNT, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    glGenerateMipmap(GL_TEXTURE_2D_ARRAY);   // 멀리 있는 면의 반짝임(모아레) 방지
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    if (GLEW_EXT_texture_filter_anisotropic) {
+        float maxAniso = 1.0f;
+        glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &maxAniso);
+        glTexParameterf(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAX_ANISOTROPY_EXT, std::min(8.0f, maxAniso));
+    }
+}
+
+// ===================================================================
 // 월드 데이터
 // ===================================================================
 struct Material {
     glm::vec3 color;
     float ks, shininess, emissive;
     int pattern;
+    int tex = -1;           // 텍스처 배열의 층 (-1 이면 텍스처 없음)
+    float texScale = 4.0f;  // 텍스처 한 장이 덮는 월드 길이
 };
 
 struct Box {
@@ -177,6 +317,7 @@ struct Box {
     Material mat;
     bool solid;
     glm::vec3 shellDir = glm::vec3(0.0f);   // 방 외벽이면 바깥 방향, 아니면 0
+    bool glassy = false;                    // 반투명 유리(난간 등): 불투명한 것을 다 그린 뒤 뒤에서부터 그린다
     glm::vec3 bmin() const { return center - size * 0.5f; }
     glm::vec3 bmax() const { return center + size * 0.5f; }
 };
@@ -212,10 +353,10 @@ struct Player {
     float fireCd, recoil, bobPhase, hurtT, landDip, deadT, muzzleT;
 } player;
 
-const Material M_FLOOR{ glm::vec3(0.8f, 0.78f, 0.74f), 0.25f, 24.0f, 0.0f, 1 };
-const Material M_CONCRETE{ glm::vec3(0.88f, 0.86f, 0.82f), 0.15f, 16.0f, 0.0f, 2 };
+const Material M_FLOOR{ glm::vec3(0.8f, 0.78f, 0.74f), 0.25f, 24.0f, 0.0f, 1, TEX_TILE, 6.0f };
+const Material M_CONCRETE{ glm::vec3(0.88f, 0.86f, 0.82f), 0.15f, 16.0f, 0.0f, 2, TEX_CONCRETE, 4.0f };
 const Material M_DARK{ glm::vec3(0.16f, 0.17f, 0.2f), 0.35f, 32.0f, 0.0f, 0 };
-const Material M_CRATE{ glm::vec3(0.78f, 0.42f, 0.28f), 0.2f, 16.0f, 0.0f, 2 };
+const Material M_CRATE{ glm::vec3(0.78f, 0.42f, 0.28f), 0.2f, 16.0f, 0.0f, 2, TEX_CRATE, -1.0f };
 const Material M_NEON{ glm::vec3(0.25f, 0.9f, 1.0f), 0.0f, 1.0f, 3.5f, 0 };
 const Material M_ENEMY{ glm::vec3(0.06f, 0.5f, 0.55f), 1.1f, 90.0f, 0.0f, 0 };
 const Material M_ENEMY_DARK{ glm::vec3(0.03f, 0.2f, 0.24f), 0.9f, 64.0f, 0.0f, 0 };
@@ -223,6 +364,10 @@ const Material M_VISOR{ glm::vec3(0.4f, 1.0f, 0.95f), 0.0f, 1.0f, 5.0f, 0 };
 
 std::vector<Box> localBoxes;    // 회전 전 방의 원본
 std::vector<Box> boxes;         // 현재 방향으로 회전된 실제 월드
+
+// 점광원 (방 좌표계). 그릴 때 방 회전을 적용하고 카메라에서 가까운 것만 셰이더로 보낸다
+struct LightSrc { glm::vec3 pos, col; float range; };
+std::vector<LightSrc> localLights;
 std::vector<Enemy> enemies;
 std::vector<Bullet> bullets;
 std::vector<Shard> shards;
@@ -288,6 +433,10 @@ void buildArena() {
     }
     addBox({ 15, 2.52f, -7.98f }, { 8, 0.06f, 0.06f }, M_NEON, false);
     addBox({ 15, 3.1f, -15.5f }, { 6, 1.2f, 0.4f }, M_CONCRETE);
+
+    // 네온 띠마다 점광원
+    for (glm::vec3 p : { glm::vec3(-11.0f, 4.3f, -6), glm::vec3(11.0f, 4.3f, 8), glm::vec3(-4, 4.3f, -14.0f), glm::vec3(15, 2.6f, -7.4f) })
+        localLights.push_back({ p, M_NEON.color * 2.5f, 13.0f });
 }
 
 // ===================================================================
@@ -365,11 +514,19 @@ void addFaceProps(int face, std::mt19937& r, const Theme& t) {
     glm::vec3 u(0.0f), v(0.0f), in = -FACE_DIRS[face];
     u[(axis + 1) % 3] = 1.0f;
     v[(axis + 2) % 3] = 1.0f;
-    Material wall{ t.wall, 0.15f, 16.0f, 0.0f, 2 }, crate{ t.crate, 0.2f, 16.0f, 0.0f, 2 }, neon{ t.neon, 0.0f, 1.0f, 3.5f, 0 };
+    Material wall{ t.wall, 0.15f, 16.0f, 0.0f, 2, TEX_CONCRETE, 4.0f }, crate{ t.crate, 0.2f, 16.0f, 0.0f, 2, TEX_CRATE, -1.0f };
+    Material neon{ t.neon, 0.0f, 1.0f, 3.5f, 0 }, fixture{ glm::vec3(1.0f, 0.93f, 0.8f), 0.0f, 1.0f, 2.5f, 0 };
     auto place = [&](float a, float b, float su, float sv, float h0, float h, const Material& m, bool solid = true) {
         glm::vec3 c = ROOM_C + FACE_DIRS[face] * ROOM_HALF + u * a + v * b + in * (h0 + h * 0.5f);
         addBox(c, u * su + v * sv + glm::abs(in) * h, m, solid);
+        return c;
     };
+    // 면마다 벽등 4개: 빛나는 판 + 점광원
+    for (int sa = -1; sa <= 1; sa += 2)
+        for (int sb = -1; sb <= 1; sb += 2) {
+            glm::vec3 c = place(sa * 13.0f * ROOM_SCALE, sb * 13.0f * ROOM_SCALE, 1.6f, 0.5f, 0.0f, 0.12f, fixture, false);
+            localLights.push_back({ c + in * 1.2f, glm::vec3(1.0f, 0.88f, 0.7f) * 2.2f, 15.0f });
+        }
     // 방이 커진 만큼 배치 범위는 배율, 개수는 면적(배율의 제곱)에 맞춘다
     const float k = ROOM_SCALE, k2 = ROOM_SCALE * ROOM_SCALE;
     for (int i = 0; i < (int)(9 * k2); ++i) {
@@ -385,7 +542,8 @@ void addFaceProps(int face, std::mt19937& r, const Theme& t) {
     for (int i = 0; i < (int)(4 * k2); ++i) {
         float a = rnd(-16 * k, 16 * k), b = rnd(-16 * k, 16 * k), h = rnd(4, 9);
         place(a, b, 1.0f, 1.0f, 0.0f, h, wall);
-        place(a, b, 1.04f, 1.04f, h - 0.5f, 0.1f, neon, false);
+        glm::vec3 c = place(a, b, 1.04f, 1.04f, h - 0.5f, 0.1f, neon, false);
+        localLights.push_back({ c, t.neon * 2.5f, 12.0f });
     }
     // 단상 + 계단
     float pa = rnd(4 * k, 12 * k), pb = rnd(-12 * k, 12 * k);
@@ -437,11 +595,15 @@ bool carVisible(const Track& t, float s) { return s > t.sMin - CAR_LEN && s < t.
 
 void buildHub() {
     const float H = ROOM_HALF;
-    Material glass{ glm::vec3(0.36f, 0.43f, 0.52f), 0.6f, 64.0f, 0.06f, 3 };
-    Material floorM{ glm::vec3(0.34f, 0.35f, 0.38f), 0.35f, 32.0f, 0.0f, 1 };
-    Material conc{ glm::vec3(0.46f, 0.47f, 0.5f), 0.15f, 16.0f, 0.0f, 2 };
+    Material glass{ glm::vec3(0.4f, 0.47f, 0.56f), 0.8f, 96.0f, 0.05f, 3, TEX_GLASS, 12.8f };
+    Material floorM{ glm::vec3(0.42f, 0.43f, 0.46f), 0.5f, 48.0f, 0.0f, 1, TEX_TILE, 8.0f };
+    Material conc{ glm::vec3(0.52f, 0.53f, 0.56f), 0.15f, 16.0f, 0.0f, 2, TEX_CONCRETE, 8.0f };
     Material railM{ glm::vec3(0.2f, 0.21f, 0.23f), 0.8f, 64.0f, 0.0f, 0 };
     Material lamp{ glm::vec3(0.85f, 0.92f, 1.0f), 0.0f, 1.0f, 2.2f, 0 };
+    Material railGlass{ glm::vec3(0.55f, 0.7f, 0.8f), 1.0f, 128.0f, 0.15f, 0 };
+    Material board{ glm::vec3(0.06f, 0.07f, 0.08f), 0.4f, 32.0f, 0.0f, 0 };
+    Material amber{ glm::vec3(1.0f, 0.6f, 0.15f), 0.0f, 1.0f, 2.8f, 0 };
+    const glm::vec3 coolLight = glm::vec3(0.8f, 0.9f, 1.0f) * 2.4f;
     for (int f = 0; f < 6; ++f) {
         glm::vec3 d = FACE_DIRS[f], ad = glm::abs(d);
         Box shell{ ROOM_C + d * (H + 0.5f), ad + (glm::vec3(1.0f) - ad) * (H * 2.0f + 2.0f), f == 3 ? floorM : glass, true };
@@ -466,12 +628,95 @@ void buildHub() {
     addBox({ 10.0f, 12.6f, 0 }, { 4.0f, 0.8f, H * 2.0f - bw * 2.0f }, conc);
     addBox({ 0, 25.6f, -9.0f }, { H * 2.0f - bw * 2.0f, 0.8f, 4.0f }, conc);
     addBox({ -7.0f, 38.6f, 0 }, { 4.0f, 0.8f, H * 2.0f - bw * 2.0f }, conc);
-    // 바닥 콘코스: 벤치와 안내판 기둥
+    // 바닥 콘코스: 벤치와 조명 기둥
     for (int i = 0; i < 6; ++i) {
         float a = i * PI / 3.0f;
         addBox({ cosf(a) * 9.0f, 0.25f, sinf(a) * 9.0f }, { 2.4f, 0.5f, 0.8f }, conc);
         addBox({ cosf(a) * 15.0f, 1.6f, sinf(a) * 15.0f }, { 0.3f, 3.2f, 0.3f }, railM);
         addBox({ cosf(a) * 15.0f, 3.3f, sinf(a) * 15.0f }, { 1.6f, 0.5f, 0.12f }, lamp, false);
+        localLights.push_back({ glm::vec3(cosf(a) * 15.0f, 3.6f, sinf(a) * 15.0f), coolLight, 14.0f });
+    }
+
+    // 계단 두 개: 바닥 → 1층(z+ 벽 쪽, x 방향), 1층 → 2층(x- 벽 쪽, z 방향). 단 높이 0.5 라 걸어서 오를 수 있다
+    // 선로가 지나가지 않는 자리에 둔다
+    const float sz = H - bw - 1.5f;
+    for (int i = 0; i < 26; ++i) {
+        addBox({ -10.0f + 0.8f * i, 0.25f + 0.5f * i, sz }, { 0.8f, 0.5f, 3.0f }, conc);
+        addBox({ -sz, 13.25f + 0.5f * i, 10.0f - 0.8f * i }, { 3.0f, 0.5f, 0.8f }, conc);
+    }
+    float slope = atanf(0.5f / 0.8f);
+    localDecor.push_back({ glm::translate(glm::mat4(1.0f), glm::vec3(0, 6.6f, sz - 1.6f)) * glm::rotate(glm::mat4(1.0f), slope, glm::vec3(0, 0, 1)) *
+                           glm::scale(glm::mat4(1.0f), glm::vec3(24.5f, 0.12f, 0.12f)), lamp });
+    localDecor.push_back({ glm::translate(glm::mat4(1.0f), glm::vec3(-sz + 1.6f, 19.6f, 0)) * glm::rotate(glm::mat4(1.0f), slope, glm::vec3(1, 0, 0)) *
+                           glm::scale(glm::mat4(1.0f), glm::vec3(0.12f, 0.12f, 24.5f)), lamp });
+
+    // 발코니 안쪽 가장자리의 유리 난간(반투명). 계단 끝과 다리가 닿는 곳은 비워 둔다
+    // {층, 난간이 놓인 축(0: x=±, 2: z=±), 부호, 비울 구간}
+    struct Gap { int lv, axis, sign; float a, b; };
+    const Gap gaps[] = {
+        { 1, 2, 1, 5.5f, 12.5f }, { 1, 2, -1, 7.5f, 12.5f }, { 1, 0, -1, 7.5f, 12.5f },
+        { 2, 0, 1, -11.5f, -6.5f }, { 2, 0, -1, -12.5f, -5.5f },
+        { 3, 2, 1, -9.5f, -4.5f }, { 3, 2, -1, -9.5f, -4.5f },
+    };
+    for (int lv = 1; lv <= 3; ++lv) {
+        float y = lv * 13.0f + 0.5f;
+        for (int axis : { 0, 2 })
+            for (int sign = -1; sign <= 1; sign += 2) {
+                // 이 변의 난간을 구간으로 나눠서 틈을 뺀 부분만 세운다
+                std::vector<std::pair<float, float>> segs{ { -(H - bw), H - bw } };
+                for (const Gap& g : gaps) {
+                    if (g.lv != lv || g.axis != axis || g.sign != sign) continue;
+                    std::vector<std::pair<float, float>> next;
+                    for (auto [a, b] : segs) {
+                        if (g.b <= a || g.a >= b) { next.push_back({ a, b }); continue; }
+                        if (g.a > a) next.push_back({ a, g.a });
+                        if (g.b < b) next.push_back({ g.b, b });
+                    }
+                    segs = next;
+                }
+                for (auto [a, b] : segs) {
+                    float mid = (a + b) * 0.5f, len = b - a;
+                    glm::vec3 c(0, y, 0), s(0.12f, 1.0f, 0.12f);
+                    int along = axis == 2 ? 0 : 2;      // 변이 z = ± 면 x 방향으로 뻗는다
+                    c[axis] = sign * (H - bw + 0.1f);
+                    c[along] = mid;
+                    s[along] = len;
+                    Box rail{ c, s, railGlass, true };
+                    rail.glassy = true;
+                    localBoxes.push_back(rail);
+                    glm::vec3 top = c + glm::vec3(0, 0.52f, 0);
+                    glm::vec3 ts = s;
+                    ts.y = 0.06f;
+                    ts[axis] = 0.16f;
+                    addBox(top, ts, railM);
+                }
+            }
+        // 발코니 아래 조명: 변마다 3개
+        for (int axis : { 0, 2 })
+            for (int sign = -1; sign <= 1; sign += 2)
+                for (int j = -1; j <= 1; ++j) {
+                    glm::vec3 p(0, lv * 13.0f - 1.6f, 0);
+                    p[axis] = sign * (H - bw - 0.5f);
+                    p[axis == 2 ? 0 : 2] = j * 15.0f;
+                    localLights.push_back({ p, coolLight * 0.9f, 15.0f });
+                }
+    }
+
+    // 천장에 매달린 출발 안내판 4개 (호박색 글자판) + 지붕 조명
+    for (int i = 0; i < 4; ++i) {
+        float a = i * PI * 0.5f + PI * 0.25f;
+        glm::vec3 p(cosf(a) * 11.0f, 50.0f, sinf(a) * 11.0f);
+        bool alongX = i % 2 == 0;
+        glm::vec3 size = alongX ? glm::vec3(6.0f, 1.4f, 0.35f) : glm::vec3(0.35f, 1.4f, 6.0f);
+        addBox(p, size, board, false);
+        glm::vec3 face = size + (alongX ? glm::vec3(-0.4f, -0.5f, 0.04f) : glm::vec3(0.04f, -0.5f, -0.4f));
+        addBox(p + glm::vec3(0, 0.05f, 0), face, amber, false);
+        for (int s = -1; s <= 1; s += 2) {
+            glm::vec3 rod = p + (alongX ? glm::vec3(s * 2.5f, 0, 0) : glm::vec3(0, 0, s * 2.5f)) + glm::vec3(0, 5.0f, 0);
+            addBox(rod, { 0.08f, 9.3f, 0.08f }, railM, false);
+        }
+        localLights.push_back({ p - glm::vec3(0, 1.5f, 0), glm::vec3(1.0f, 0.7f, 0.3f) * 2.0f, 12.0f });
+        localLights.push_back({ glm::vec3(cosf(a) * 18.0f, H * 2.0f - 2.0f, sinf(a) * 18.0f), coolLight * 1.3f, 26.0f });
     }
 
     // 8방향 선로. 높이를 모두 달리 해서 서로, 그리고 발코니와 부딪히지 않는다
@@ -529,6 +774,7 @@ void clearPortalZones() {
 void buildLocalWorld(int cell) {
     localBoxes.clear();
     localDecor.clear();
+    localLights.clear();
     tracks.clear();
     if (cell == HUB_CELL) { buildHub(); return; }
     bool arena = cell == ARENA_CELL;
@@ -537,7 +783,8 @@ void buildLocalWorld(int cell) {
     for (int f = 0; f < 6; ++f) {
         glm::vec3 d = FACE_DIRS[f], ad = glm::abs(d);
         glm::vec3 base = arena && f == 3 ? M_FLOOR.color : t.wall;
-        Material m{ glm::mix(base, FACE_COLORS[f], f == 3 ? 0.18f : 0.42f), 0.2f, 24.0f, 0.0f, 1 };
+        Material m{ glm::mix(base, FACE_COLORS[f], f == 3 ? 0.18f : 0.42f), 0.2f, 24.0f, 0.0f, 1,
+                    f == 3 ? TEX_TILE : TEX_PANEL, f == 3 ? 6.0f : 12.0f };
         Box shell{ ROOM_C + d * (ROOM_HALF + 0.5f), ad + (glm::vec3(1.0f) - ad) * (ROOM_HALF * 2.0f + 2.0f), m, true };
         shell.shellDir = d;
         localBoxes.push_back(shell);
@@ -1431,7 +1678,9 @@ struct SceneLocs {
     GLint model, view, proj, lightVP, normalMat, objColor, Ks, shininess, emissive, pattern;
     GLint sunDir, sunColor, skyAmb, groundAmb, viewPos, fogColor, fogDensity, farPlane, shadowMap;
     GLint pointPos, pointColor, pointPower, alpha;
+    GLint objScale, texLayer, texScale, albedoTex, numLights, lightPos, lightCol, lightRange;
 } sl;
+long long statDrawCalls = 0, statTriangles = 0;    // 성능 측정용 (프레임마다 0으로)
 GLint shadowModelLoc, shadowVPLoc;
 
 GLuint shadowFbo, shadowTex;
@@ -1521,9 +1770,14 @@ void drawMesh(const Mesh& mesh, const glm::mat4& m, const Material& mat) {
         glUniform1f(sl.shininess, mat.shininess);
         glUniform1f(sl.emissive, mat.emissive);
         glUniform1i(sl.pattern, mat.pattern);
+        glUniform1i(sl.texLayer, mat.tex);
+        glUniform1f(sl.texScale, mat.texScale);
+        glUniform3f(sl.objScale, glm::length(glm::vec3(m[0])), glm::length(glm::vec3(m[1])), glm::length(glm::vec3(m[2])));
     }
     glBindVertexArray(mesh.vao);
     glDrawArrays(GL_TRIANGLES, 0, mesh.count);
+    ++statDrawCalls;
+    statTriangles += mesh.count / 3;
 }
 
 glm::mat4 TRS(glm::vec3 t, glm::vec3 s) {
@@ -1560,7 +1814,7 @@ void drawPart(const glm::mat4& m, const Material& mat) {
 
 // 객차: 선로 좌표계(trackFrame)에 방 회전(roomToWorld)을 곱한 행렬 하나로 몸체와 부품을 모두 배치
 void drawTrains() {
-    Material body{ glm::vec3(0.62f, 0.64f, 0.68f), 0.9f, 72.0f, 0.0f, 0 };
+    Material body{ glm::vec3(0.62f, 0.64f, 0.68f), 0.9f, 72.0f, 0.0f, 0, TEX_METAL, 7.0f };
     Material dark{ glm::vec3(0.12f, 0.13f, 0.15f), 0.5f, 32.0f, 0.0f, 0 };
     Material win{ glm::vec3(1.0f, 0.8f, 0.52f), 0.0f, 1.0f, 1.1f, 0 };
     Material red{ glm::vec3(1.0f, 0.12f, 0.08f), 0.0f, 1.0f, 6.0f, 0 };
@@ -1573,6 +1827,10 @@ void drawTrains() {
             drawPart(C * TRS({ 0, -CAR_H * 0.5f + 0.3f, 0 }, { CAR_LEN * 0.99f, 0.6f, CAR_W + 0.03f }), dark);
             drawPart(C * TRS({ 0, CAR_H * 0.5f + 0.06f, 0 }, { CAR_LEN * 0.95f, 0.12f, CAR_W * 0.7f }), dark);
             drawPart(C * TRS({ 0, 0.35f, 0 }, { CAR_LEN * 0.9f, 0.75f, CAR_W + 0.04f }), win);
+            // 양옆 출입문 두 개씩 + 선두·후미 행선판
+            for (int d = -1; d <= 1; d += 2)
+                drawPart(C * TRS({ d * CAR_LEN * 0.25f, -0.15f, 0 }, { 1.2f, 2.3f, CAR_W + 0.06f }), dark);
+            if (i == 0) drawPart(C * TRS({ CAR_LEN * 0.5f + 0.02f, 0.9f, 0 }, { 0.06f, 0.4f, 1.6f }), win);
             for (int s = -1; s <= 1; s += 2) {
                 if (i == 0) drawPart(C * TRS({ CAR_LEN * 0.5f + 0.03f, -0.55f, s * 0.8f }, { 0.06f, 0.32f, 0.42f }), red);
                 if (i == t.cars - 1) drawPart(C * TRS({ -CAR_LEN * 0.5f - 0.03f, -0.55f, s * 0.8f }, { 0.06f, 0.32f, 0.42f }), red);
@@ -1612,6 +1870,7 @@ void drawPortals(bool films) {
 void drawWorld(bool withEffects) {
     for (const auto& b : boxes) {
         if (shadowPass && b.mat.emissive > 0.0f) continue;
+        if (b.glassy) continue;     // 반투명은 drawTransparent 에서
         if (b.shellDir != glm::vec3(0.0f)) {
             // 외벽은 그림자를 드리우지 않고, 맨 위에 온 면은 열어서 하늘이 보이게 한다 (허브는 유리 지붕)
             if (shadowPass || (b.shellDir.y > 0.5f && currentCell != HUB_CELL)) continue;
@@ -1657,6 +1916,59 @@ void drawWorld(bool withEffects) {
         Material m{ s.color, 0.0f, 1.0f, 4.0f, 0 };
         drawMesh(cubeMesh, TRS(s.pos, glm::vec3(0.05f * std::min(1.0f, s.life * 3.0f))), m);
     }
+}
+
+// 조명 후보(방 조명 + 달리는 객차의 창 불빛)를 월드로 옮기고, 화면에 영향이 큰 가까운 것부터 MAX 개를 보낸다
+const int MAX_LIGHTS = 24;
+int statLights = 0;
+void uploadLights(glm::vec3 eye) {
+    std::vector<LightSrc> cand;
+    cand.reserve(localLights.size() + 40);
+    glm::mat4 W = roomToWorld();
+    for (const auto& l : localLights) cand.push_back({ glm::vec3(W * glm::vec4(l.pos, 1.0f)), l.col, l.range });
+    for (int k = 0; k < (int)tracks.size(); ++k)
+        for (int i = 0; i < tracks[k].cars; ++i)
+            if (carVisible(tracks[k], carS(tracks[k], i)))
+                cand.push_back({ glm::vec3(carWorld(k, i)[3]), glm::vec3(1.0f, 0.72f, 0.42f) * 1.6f, 10.0f });
+    int n = std::min((int)cand.size(), MAX_LIGHTS);
+    std::partial_sort(cand.begin(), cand.begin() + n, cand.end(), [&](const LightSrc& a, const LightSrc& b) {
+        return glm::length(a.pos - eye) - a.range < glm::length(b.pos - eye) - b.range;
+    });
+    std::vector<glm::vec3> pos(n), col(n);
+    std::vector<float> range(n);
+    for (int i = 0; i < n; ++i) { pos[i] = cand[i].pos; col[i] = cand[i].col; range[i] = cand[i].range; }
+    glUniform1i(sl.numLights, n);
+    if (n > 0) {
+        glUniform3fv(sl.lightPos, n, glm::value_ptr(pos[0]));
+        glUniform3fv(sl.lightCol, n, glm::value_ptr(col[0]));
+        glUniform1fv(sl.lightRange, n, range.data());
+    }
+    statLights = n;
+}
+
+// 반투명: 불투명한 것을 다 그린 뒤, 깊이는 쓰지 않고 카메라에서 먼 것부터(뒤→앞) 알파 블렌딩
+void drawTransparent(glm::vec3 eye) {
+    glEnable(GL_BLEND);
+    glDepthMask(GL_FALSE);
+    glColorMaski(1, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);   // 외곽선용 법선 버퍼는 건드리지 않는다
+
+    std::vector<const Box*> glassList;
+    for (const auto& b : boxes) if (b.glassy) glassList.push_back(&b);
+    std::sort(glassList.begin(), glassList.end(), [&](const Box* a, const Box* b) {
+        return glm::length(a->center - eye) > glm::length(b->center - eye);
+    });
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glUniform1f(sl.alpha, 0.28f);
+    for (const Box* b : glassList) drawMesh(cubeMesh, TRS(b->center, b->size), b->mat);
+
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);      // 포털 막은 빛이므로 더하기
+    glUniform1f(sl.alpha, 0.35f + 0.1f * sinf(globalTime * 2.0f));
+    drawPortals(true);
+
+    glUniform1f(sl.alpha, 1.0f);
+    glColorMaski(1, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
 }
 
 void drawViewModel(const glm::mat4& view) {
@@ -1864,20 +2176,13 @@ void renderFrame(int w, int h) {
     glUniform1f(sl.pointPower, player.muzzleT > 0.0f ? 6.0f : 0.0f);
 
     glUniform1f(sl.alpha, 1.0f);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, albedoArray);
+    glUniform1i(sl.albedoTex, 1);
+    glActiveTexture(GL_TEXTURE0);
+    uploadLights(eye);
     drawWorld(true);
-
-    // 반투명 포털 막: 불투명한 것을 다 그린 뒤 깊이는 쓰지 않고 알파 블렌딩으로 더한다.
-    // 외곽선 검출용 법선 버퍼(1번)는 건드리지 않는다
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-    glDepthMask(GL_FALSE);
-    glColorMaski(1, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-    glUniform1f(sl.alpha, 0.35f + 0.1f * sinf(globalTime * 2.0f));
-    drawPortals(true);
-    glUniform1f(sl.alpha, 1.0f);
-    glColorMaski(1, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-    glDepthMask(GL_TRUE);
-    glDisable(GL_BLEND);
+    drawTransparent(eye);
 
     glClear(GL_DEPTH_BUFFER_BIT);
     drawViewModel(view);
@@ -2274,6 +2579,95 @@ void shotScript(int frame, int w, int h) {
     }
 }
 
+// ===================================================================
+// --bench: 장면마다 카메라를 한 바퀴 돌리며 프레임 시간 측정 (수직동기 끔, 매 프레임 glFinish 로 GPU 까지 포함)
+// ===================================================================
+struct BenchScene {
+    const char* name;
+    int cell;
+    glm::vec3 pos;
+    float pitch;
+    int extraBoxes;     // 방을 꽉 채우는 스트레스용 추가 상자 수
+    bool enemies;
+};
+const BenchScene BENCH[] = {
+    { "HUB floor center", HUB_CELL, glm::vec3(0, 0, 0), 0.25f, 0, false },
+    { "HUB balcony L2", HUB_CELL, glm::vec3(0, 26.0f, 24.0f), -0.1f, 0, false },
+    { "ROOM 14 + enemies", 14, glm::vec3(0, 0, 0), 0.1f, 0, true },
+    { "ROOM 26 arena", ARENA_CELL, glm::vec3(0, 0, 4), 0.1f, 0, true },
+    { "ROOM 24 rotated", 24, glm::vec3(0, 0, 0), 0.1f, 0, true },
+    { "STRESS 14 +2000 box", 14, glm::vec3(0, 0, 0), 0.2f, 2000, true },
+    { "STRESS 14 +8000 box", 14, glm::vec3(0, 0, 0), 0.2f, 8000, true },
+};
+const int BENCH_WARM = 40, BENCH_MEAS = 240;
+
+void benchSetup(const BenchScene& s) {
+    if (s.cell == 24) turnSlice(1, 1, 1);   // 윗층을 돌려 24번 방의 방향을 바꿔 둔다
+    travelTo(s.cell, glm::vec3(0.0f));
+    roomCleared[s.cell] = !s.enemies;
+    if (s.enemies) { spawnWave(); spawnWave(); waveTimer = 1e9f; }
+    std::mt19937 r(1234);
+    std::uniform_real_distribution<float> u(-ROOM_HALF + 1.0f, ROOM_HALF - 1.0f), sz(0.5f, 2.0f);
+    for (int i = 0; i < s.extraBoxes; ++i) {
+        glm::vec3 c(u(r), u(r) + ROOM_HALF, u(r));
+        if (glm::length(glm::vec2(c.x, c.z)) < 4.0f && c.y < 4.0f) continue;   // 카메라 자리는 비움
+        boxes.push_back({ c, glm::vec3(sz(r), sz(r), sz(r)), M_CRATE, false });
+    }
+    player.hp = 1000000;
+    player.pos = s.pos;
+}
+
+// 매 프레임 루프 맨 앞에서 호출. 끝나면 false
+bool benchStep(float frameMs) {
+    static int scene = -1, f = 0;
+    static std::vector<float> ms;
+    static long long dcSum = 0, triSum = 0, lightSum = 0;
+    static std::vector<std::string> report;
+    const int nScenes = (int)(sizeof(BENCH) / sizeof(BENCH[0]));
+    if (scene < 0) { scene = 0; f = 0; benchSetup(BENCH[0]); }
+    const BenchScene& s = BENCH[scene];
+    ++f;
+    if (f > BENCH_WARM) {
+        ms.push_back(frameMs);
+        dcSum += statDrawCalls;
+        triSum += statTriangles;
+        lightSum += statLights;
+    }
+    if (f >= BENCH_WARM + BENCH_MEAS) {
+        std::vector<float> sorted = ms;
+        std::sort(sorted.begin(), sorted.end());
+        float avg = std::accumulate(ms.begin(), ms.end(), 0.0f) / ms.size();
+        float p99 = sorted[(size_t)(sorted.size() * 0.99f)];
+        int n = (int)ms.size();
+        int w, h;
+        glfwGetFramebufferSize(gWindow, &w, &h);
+        char line[256];
+        snprintf(line, sizeof(line), "%-22s %4dx%-4d avg %6.2f ms (%5.0f fps)  1%%low %6.2f ms (%5.0f fps)  draws %6lld  tris %8lld  lights %2lld  boxes %5d",
+                 s.name, w, h, avg, 1000.0f / avg, p99, 1000.0f / p99, dcSum / n, triSum / n, lightSum / n, (int)boxes.size());
+        std::cout << "[bench] " << line << "\n";
+        report.push_back(line);
+        ms.clear();
+        dcSum = triSum = lightSum = 0;
+        ++scene;
+        f = 0;
+        if (scene >= nScenes) {
+            std::ofstream out("bench_result.txt");
+            out << "GPU " << (const char*)glGetString(GL_RENDERER) << "\n";
+            for (auto& l : report) out << l << "\n";
+            return false;
+        }
+        initCube();
+        benchSetup(BENCH[scene]);
+    }
+    // 카메라 고정 위치에서 한 바퀴 회전
+    player.pos = s.pos;
+    player.vel = glm::vec3(0.0f);
+    player.onGround = true;
+    player.yaw = (float)f / (BENCH_WARM + BENCH_MEAS) * 2.0f * PI;
+    player.pitch = s.pitch;
+    return true;
+}
+
 void saveScreenshot(int w, int h, const std::string& path) {
     std::vector<unsigned char> px((size_t)w * h * 3);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
@@ -2285,6 +2679,8 @@ void saveScreenshot(int w, int h, const std::string& path) {
 
 int main(int argc, char** argv) {
     bool shotMode = argc > 1 && std::string(argv[1]) == "--shot";
+    bool benchMode = argc > 1 && std::string(argv[1]) == "--bench";
+    int benchW = argc > 3 ? atoi(argv[2]) : 1280, benchH = argc > 3 ? atoi(argv[3]) : 720;
     int frameCount = 0;
     if (!glfwInit()) return -1;
 
@@ -2292,14 +2688,14 @@ int main(int argc, char** argv) {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(1280, 720, "Cube", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(benchMode ? benchW : 1280, benchMode ? benchH : 720, "Cube", nullptr, nullptr);
     if (!window) {
         glfwTerminate();
         return -1;
     }
     gWindow = window;
     glfwMakeContextCurrent(window);
-    glfwSwapInterval(1);
+    glfwSwapInterval(benchMode ? 0 : 1);
 
     glewExperimental = GL_TRUE;
     if (glewInit() != GLEW_OK) {
@@ -2351,6 +2747,14 @@ int main(int argc, char** argv) {
     sl.pointColor = U(sceneProg, "pointColor");
     sl.pointPower = U(sceneProg, "pointPower");
     sl.alpha = U(sceneProg, "alpha");
+    sl.objScale = U(sceneProg, "objScale");
+    sl.texLayer = U(sceneProg, "texLayer");
+    sl.texScale = U(sceneProg, "texScale");
+    sl.albedoTex = U(sceneProg, "albedoTex");
+    sl.numLights = U(sceneProg, "numLights");
+    sl.lightPos = U(sceneProg, "lightPos");
+    sl.lightCol = U(sceneProg, "lightCol");
+    sl.lightRange = U(sceneProg, "lightRange");
     shadowModelLoc = U(shadowProg, "model");
     shadowVPLoc = U(shadowProg, "lightVP");
 
@@ -2368,6 +2772,10 @@ int main(int argc, char** argv) {
     glBindVertexArray(0);
 
     createShadowMap();
+    double texT0 = glfwGetTime();
+    createTextures();
+    std::cout << "[info] textures " << TEX_COUNT << " x " << TEX_SIZE << "^2 generated in " << (int)((glfwGetTime() - texT0) * 1000) << " ms\n"
+              << "[info] GPU " << (const char*)glGetString(GL_RENDERER) << " / GL " << (const char*)glGetString(GL_VERSION) << "\n";
     cubeViewQ = glm::angleAxis(0.5f, glm::vec3(1, 0, 0)) * glm::angleAxis(-0.6f, glm::vec3(0, 1, 0));
     restartRun();
 
@@ -2387,6 +2795,8 @@ int main(int argc, char** argv) {
         double curTime = glfwGetTime();
         float dt = (float)(curTime - lastTime);
         lastTime = curTime;
+        if (benchMode && !benchStep(dt * 1000.0f)) break;
+        statDrawCalls = statTriangles = 0;
         fpsAcc += dt;
         ++fpsFrames;
         if (fpsAcc >= 0.5f) { fps = fpsFrames / fpsAcc; fpsAcc = 0.0f; fpsFrames = 0; }
@@ -2405,6 +2815,7 @@ int main(int argc, char** argv) {
                 renderHUD(w, h);
             }
             if (shotMode) shotScript(++frameCount, w, h);
+            if (benchMode) glFinish();     // GPU 가 끝날 때까지 기다려 실제 프레임 시간을 잰다
         }
 
         glfwSwapBuffers(window);

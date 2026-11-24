@@ -4,6 +4,8 @@ in vec3 wNormal;
 in vec3 vNormalView;
 in vec4 lsPos;
 in float viewDepth;
+in vec3 oPos;
+in vec3 oNormal;
 
 layout (location = 0) out vec4 outColor;
 layout (location = 1) out vec4 outNormal;   // 뷰 공간 법선 + 선형 깊이 (외곽선 검출용)
@@ -28,6 +30,19 @@ uniform sampler2D shadowMap;
 uniform vec3 pointPos;
 uniform vec3 pointColor;
 uniform float pointPower;
+
+// 텍스처 매핑: 코드로 만든 이미지 배열. 물체 공간 좌표를 면 방향에 맞는 평면에 투영해 UV 로 쓴다
+uniform sampler2DArray albedoTex;
+uniform int texLayer;               // -1 이면 텍스처 없음
+uniform float texScale;             // 텍스처 한 장이 덮는 길이
+uniform vec3 objScale;
+
+// 점광원(조명등, 네온) 여러 개. 카메라에서 가까운 것만 CPU 가 골라서 보낸다
+const int MAX_LIGHTS = 24;
+uniform int numLights;
+uniform vec3 lightPos[MAX_LIGHTS];
+uniform vec3 lightCol[MAX_LIGHTS];
+uniform float lightRange[MAX_LIGHTS];
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 
@@ -92,17 +107,44 @@ void main()
     vec3 N = normalize(wNormal);
     vec3 L = normalize(sunDir);
     vec3 V = normalize(viewPos - wPos);
-    vec3 base = surface(objColor, N);
+    vec3 base;
+    float specMask = 1.0;
+    if (texLayer >= 0) {
+        vec3 an = abs(oNormal);
+        vec2 uv = an.y > 0.5 ? oPos.xz : (an.x > 0.5 ? oPos.zy : oPos.xy);
+        vec2 sz = an.y > 0.5 ? objScale.xz : (an.x > 0.5 ? objScale.zy : objScale.xy);
+        // texScale < 0: 면 하나에 텍스처 한 장을 딱 맞춤 (상자 테두리용)
+        vec2 tc = texScale > 0.0 ? uv / texScale : uv / sz + 0.5;
+        vec4 t = texture(albedoTex, vec3(tc, float(texLayer)));
+        base = objColor * t.rgb;
+        specMask = t.a;
+    } else {
+        base = surface(objColor, N);
+    }
+    float ks = Ks * specMask;
 
     float sh = shadowFactor(N, L);
     float NdotL = max(dot(N, L), 0.0);
     vec3 amb = mix(groundAmb, skyAmb, N.y * 0.5 + 0.5);     // 반구 주변광
     vec3 R = reflect(-L, N);
-    float spec = NdotL > 0.0 ? pow(max(dot(V, R), 0.0), shininess) * Ks : 0.0;
+    float spec = NdotL > 0.0 ? pow(max(dot(V, R), 0.0), shininess) * ks : 0.0;
 
     vec3 col = base * (amb + sunColor * NdotL * sh) + sunColor * spec * sh;
-    float fres = pow(1.0 - max(dot(N, V), 0.0), 4.0) * Ks * 0.4;
+    float fres = pow(1.0 - max(dot(N, V), 0.0), 4.0) * ks * 0.4;
     col += skyAmb * fres;
+
+    // 점광원: Phong(확산 + 반사) + 거리 감쇠. 범위 끝에서 부드럽게 0 이 되도록
+    for (int i = 0; i < numLights; ++i) {
+        vec3 lv = lightPos[i] - wPos;
+        float d = length(lv);
+        if (d > lightRange[i]) continue;
+        vec3 Lp = lv / d;
+        float fall = clamp(1.0 - pow(d / lightRange[i], 2.0), 0.0, 1.0);
+        float att = fall * fall / (1.0 + 0.05 * d * d);
+        float nl = max(dot(N, Lp), 0.0);
+        float sp = nl > 0.0 ? pow(max(dot(V, reflect(-Lp, N)), 0.0), shininess) * ks : 0.0;
+        col += (base * nl + sp) * lightCol[i] * att;
+    }
 
     if (pointPower > 0.0) {
         vec3 lv = pointPos - wPos;
