@@ -39,6 +39,7 @@ void spawnWave() {
         e.spawnT = -frand(0.0f, 1.2f);     // 한꺼번에 솟지 않고 조금씩 엇갈려 올라온다
         e.strafe = frand(0, 1) < 0.5f ? -1.0f : 1.0f;
         e.alive = true;
+        e.rusher = i % 2 == 1;     // 절반은 달려드는 근접형
         enemies.push_back(e);
     }
 }
@@ -267,7 +268,10 @@ EnemyRig enemyRig(const Enemy& e) {
     }
     r.arms[0] = glm::rotate(glm::translate(r.root, glm::vec3(-0.37f, 1.55f, 0)), -swing * 0.7f, glm::vec3(1, 0, 0));
     float aim = -PI * 0.5f * glm::clamp(e.aimT, 0.3f, 1.0f);
-    r.arms[1] = glm::rotate(glm::translate(r.root, glm::vec3(0.37f, 1.55f, 0)), aim, glm::vec3(1, 0, 0));
+    // 근접형: 달릴 때는 양팔을 앞뒤로 흔들고, 내려치기 준비 중에는 양팔을 머리 위로 든다
+    float armR = !e.rusher ? aim : (e.atkT > 0.0f ? -PI * 0.95f : swing * 0.7f);
+    if (e.rusher && e.atkT > 0.0f) r.arms[0] = glm::rotate(glm::translate(r.root, glm::vec3(-0.37f, 1.55f, 0)), -PI * 0.95f, glm::vec3(1, 0, 0));
+    r.arms[1] = glm::rotate(glm::translate(r.root, glm::vec3(0.37f, 1.55f, 0)), armR, glm::vec3(1, 0, 0));
     r.torso = glm::translate(r.root, glm::vec3(0, 1.25f, 0));
     r.head = glm::translate(r.root, glm::vec3(0, 1.82f, 0));
     return r;
@@ -294,14 +298,15 @@ void killEnemy(Enemy& e, glm::vec3 hitDir) {
         s.size = frand(0.08f, 0.24f);
         s.life = frand(6, 9);
         s.glow = i < 5;
-        s.color = s.glow ? M_VISOR.color : (frand(0, 1) < 0.5f ? M_ENEMY.color : M_ENEMY_DARK.color);
+        s.color = s.glow ? (e.rusher ? M_RUSHER_VISOR.color : M_VISOR.color)
+                         : (frand(0, 1) < 0.5f ? (e.rusher ? M_RUSHER.color : M_ENEMY.color) : M_ENEMY_DARK.color);
         shards.push_back(s);
     }
     if (shards.size() > 700) shards.erase(shards.begin(), shards.begin() + (shards.size() - 700));
 }
 
 void hurtPlayer() {
-    if (player.dead) return;
+    if (player.dead || player.hurtT > 0.5f) return;    // 맞은 직후 약 0.3초 무적 (여럿에게 한꺼번에 맞아 즉사하지 않게)
     --player.hp;
     player.hurtT = 1.0f;
     if (player.hp <= 0) {
@@ -490,12 +495,36 @@ void updateEnemies(float dt) {
         else if (dist < 6.0f) move = -dir;
         else move = glm::vec3(-dir.z, 0, dir.x) * e.strafe * 0.7f;
         if (frand(0, 1) < dt * 0.4f) e.strafe = -e.strafe;
-        if (glm::length(move) > 0.01f && !player.dead) {
+        if (glm::length(move) > 0.01f && !player.dead && !e.rusher) {
             e.pos += glm::normalize(move) * 2.3f * dt;
             e.walkT += dt;
         }
         for (const auto& b : boxes)
             if (b.solid && b.bmax().y > e.pos.y + STEP_H && b.bmin().y < e.pos.y + ENEMY_H) pushOutCircle(e.pos, ENEMY_R, b);
+
+        if (e.rusher) {
+            // 근접형: 곧장 달려와서, 가까우면 팔을 들고(0.4초 준비) 내려친다. 그 사이 피하면 빗나간다
+            float vdist = fabsf(player.pos.y - e.pos.y);
+            if (e.atkT > 0.0f) {
+                e.atkT -= dt;
+                if (e.atkT <= 0.0f) {
+                    e.atkT = 0.0f;
+                    e.atkCd = 1.0f;
+                    if (!player.dead && dist < 2.0f && vdist < 1.6f) hurtPlayer();
+                    spawnSparks(e.pos + dir * 0.8f + glm::vec3(0, 1.0f, 0), glm::vec3(1.0f, 0.5f, 0.1f), 8, 3.0f);
+                }
+            } else if (!player.dead) {
+                e.atkCd -= dt;
+                if (dist < 1.5f && vdist < 1.6f && e.atkCd <= 0.0f) e.atkT = 0.4f;
+                else if (dist > 1.1f) {
+                    e.pos += dir * 5.2f * dt;
+                    e.walkT += dt * 1.6f;
+                }
+            }
+            for (const auto& b : boxes)
+                if (b.solid && b.bmax().y > e.pos.y + STEP_H && b.bmin().y < e.pos.y + ENEMY_H) pushOutCircle(e.pos, ENEMY_R, b);
+            continue;
+        }
 
         glm::vec3 muzzle = enemyMuzzle(e);
         bool see = !segmentBlocked(muzzle, head);

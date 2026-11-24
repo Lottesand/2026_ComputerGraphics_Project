@@ -213,6 +213,21 @@ void shotScript(int frame, int w, int h) {
         while (wave < 2) spawnWave();
         int spawned = (int)enemies.size() - before;
         std::cout << "[test] waves 1-2 spawned " << spawned << " (expect up to 30)" << (spawned >= 24 ? "" : " FAIL") << "\n";
+        // 근접형: 옆에 붙은 하나가 팔을 들었다 내려쳐 정확히 1 칸 깎는다 (직후 무적이라 두 번 안 맞음)
+        int rushers = 0;
+        for (const auto& e : enemies) rushers += e.rusher;
+        Enemy r{};
+        r.pos = player.pos + glm::vec3(1.2f, 0, 0);
+        r.alive = r.rusher = true;
+        r.spawnT = 1.0f;
+        enemies.push_back(r);
+        int hp0 = player.hp;
+        player.hurtT = 0.0f;
+        bool raised = false;
+        for (int k = 0; k < 14; ++k) { updateEnemies(0.05f); raised = raised || enemies.back().atkT > 0.0f; }
+        std::cout << "[test] rushers " << rushers << " melee raised " << raised << " hp " << hp0 << " -> " << player.hp
+                  << ((rushers > 0 && raised && player.hp == hp0 - 1) ? "" : " FAIL") << "\n";
+        player.hp = hp0;
         // 방 강제 클리어: 마지막 웨이브까지 진행된 것으로 하고 적을 모두 처치
         wave = ROOM_WAVES;
         for (auto& e : enemies) killEnemy(e, glm::vec3(0, 0, 1));

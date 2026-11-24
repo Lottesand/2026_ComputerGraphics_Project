@@ -98,6 +98,8 @@ struct Enemy {
     glm::vec3 pos;
     float yaw, shootCd, walkT, strafe, spawnT, aimT, vy;
     bool alive;
+    bool rusher;            // 근접형: 총 대신 달려와서 내려친다
+    float atkT, atkCd;      // 내려치기 준비 남은 시간(팔을 든 상태), 다음 공격까지
 };
 
 
@@ -145,6 +147,10 @@ const Material M_NEON{ glm::vec3(0.25f, 0.9f, 1.0f), 0.0f, 1.0f, 3.5f, 0 };
 const Material M_ENEMY{ glm::vec3(0.06f, 0.5f, 0.55f), 1.1f, 90.0f, 0.0f, 0 };
 
 const Material M_ENEMY_DARK{ glm::vec3(0.03f, 0.2f, 0.24f), 0.9f, 64.0f, 0.0f, 0 };
+
+const Material M_RUSHER{ glm::vec3(0.62f, 0.12f, 0.06f), 1.0f, 80.0f, 0.0f, 0 };
+
+const Material M_RUSHER_VISOR{ glm::vec3(1.0f, 0.55f, 0.1f), 0.0f, 1.0f, 5.0f, 0 };
 
 const Material M_VISOR{ glm::vec3(0.4f, 1.0f, 0.95f), 0.0f, 1.0f, 5.0f, 0 };
 

@@ -180,16 +180,16 @@ glm::mat4 orientTo(glm::vec3 dir) {
 
 void drawEnemy(const Enemy& e) {
     EnemyRig r = enemyRig(e);
-    Material skin = M_ENEMY;
+    Material skin = e.rusher ? M_RUSHER : M_ENEMY;
     if (e.spawnT < 1.0f) skin.emissive = (1.0f - e.spawnT) * 2.0f;
     for (int i = 0; i < 2; ++i)
         drawMesh(cubeMesh, r.legs[i] * TRS({ 0, -0.45f, 0 }, { 0.2f, 0.9f, 0.22f }), M_ENEMY_DARK);
     drawMesh(cubeMesh, r.torso * glm::scale(glm::mat4(1.0f), glm::vec3(0.55f, 0.75f, 0.3f)), skin);
     drawMesh(cubeMesh, r.head * glm::scale(glm::mat4(1.0f), glm::vec3(0.3f, 0.34f, 0.3f)), skin);
-    drawMesh(cubeMesh, r.head * TRS({ 0, 0.02f, 0.155f }, { 0.24f, 0.06f, 0.02f }), M_VISOR);
+    drawMesh(cubeMesh, r.head * TRS({ 0, 0.02f, 0.155f }, { 0.24f, 0.06f, 0.02f }), e.rusher ? M_RUSHER_VISOR : M_VISOR);
     for (int i = 0; i < 2; ++i)
         drawMesh(cubeMesh, r.arms[i] * TRS({ 0, -0.35f, 0 }, { 0.14f, 0.7f, 0.14f }), skin);
-    drawMesh(cubeMesh, r.arms[1] * TRS({ 0, -0.75f, 0.04f }, { 0.08f, 0.34f, 0.12f }), M_DARK);
+    if (!e.rusher) drawMesh(cubeMesh, r.arms[1] * TRS({ 0, -0.75f, 0.04f }, { 0.08f, 0.34f, 0.12f }), M_DARK);   // 총 (근접형은 맨손)
 }
 
 void drawPart(const glm::mat4& m, const Material& mat) {
