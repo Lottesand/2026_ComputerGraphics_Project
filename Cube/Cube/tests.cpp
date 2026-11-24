@@ -295,12 +295,145 @@ void shotScript(int frame, int w, int h) {
             std::cout << "[test] style shot cell " << styleCells[k] << " " << styleName(styleForCell(styleCells[k])) << "\n";
         }
     }
+    // 변신 아이템: 인카운터 → Tab 강조 → F 획득 → C 장착 → 근접 → 던지기/회수 → 가드 반사 → 튕기기 → 휠 → Z 해제
+    static int step = 0, sf = 0, killsAt = 0;
+    static bool capFail = false;
+    auto ck = [&](bool ok, const char* what) { if (!ok) { capFail = true; std::cout << "[test] FAIL cap: " << what << "\n"; } };
+    auto addEnemy = [&](glm::vec3 p) { Enemy e{}; e.pos = p; e.alive = true; e.spawnT = 1.0f; e.hp = 1.0f; e.shootCd = 1e9f; enemies.push_back(e); };
+    auto timedOut = [&](int n, const char* what) { if (frame - sf > n) { ck(false, what); return true; } return false; };
     if (phase == 2 && frame == t0 + 300) {
-        restartRun();
-        std::cout << "[test] restart -> cell " << currentCell << " cleared rooms " << std::count(std::begin(roomCleared), std::end(roomCleared), true) << "\n";
+        phase = 3; step = 0; sf = frame;
+        // 증강을 먹을수록 적이 늘어난다: 증강 10개면 첫 웨이브 12 → 약 19
+        enemies.clear(); wave = 0;
+        ownedAugments.assign(10, 0);
+        spawnWave();
+        int n = (int)enemies.size();
+        std::cout << "[test] wave 1 with 10 augments: " << n << " enemies (base 12)\n";
+        ck(n >= 17, "enemy count scales with augments");
+        ownedAugments.clear(); enemies.clear(); wave = 0;
+        int cell = 10;      // 툰 스타일 방 (색이 보인다)
+        roomCleared[cell] = true;
+        startEncounter(cell, ITEM_CAPTAIN);
+        std::cout << "[test] encounter in room " << encounterCell << " placed-here " << encounterPlaced << "\n";
+        ck(encounterCell == cell && !encounterPlaced, "encounter start");
+        openCubeView();
     }
-    if (phase == 2 && frame == t0 + 315) {
+    if (phase == 3 && step == 0 && frame == sf + 1) {
+        shot(40);     // Tab 화면: 이상 현상 칸 테두리 강조
+        closeCubeView();
+        travelTo(10, glm::vec3(0.0f));
+        fadeT = 0.0f; bannerT = 0.0f;
+        player.hp = 1000;
+        glm::vec3 p = encounterPos;
+        std::cout << "[test] encounter item at " << pv(p) << " placed " << encounterPlaced << "\n";
+        ck(encounterPlaced && spotIsFree(p, 1.2f) && glm::length(glm::vec2(p.x, p.z)) > 8.0f, "encounter placement");
+        player.pos = p + glm::vec3(2.2f, 0, 0);
+        player.vel = glm::vec3(0.0f);
+        aimAt(p + glm::vec3(0, 1.5f, 0));
+        step = 1; sf = frame;
+    }
+    if (phase == 3 && step == 1 && frame == sf + 3) {
+        shot(41);
+        ck(nearEncounter(), "near encounter");
+        tryInteract();
+        ck(invSlots[0] == ITEM_CAPTAIN && encounterCell < 0, "item collected into slot 0");
+        cKeyDown(); cKeyUp();       // C 짧게 = 첫 아이템
+        ck(capActive(), "short C equips");
+        // 빈 방(외벽만)에서 전투 확인
+        boxes.erase(std::remove_if(boxes.begin(), boxes.end(), [](const Box& b) { return b.shellDir == glm::vec3(0.0f); }), boxes.end());
+        enemies.clear(); bullets.clear();
+        player.pos = glm::vec3(-15.0f, 0, 0); player.vel = glm::vec3(0.0f);
+        player.yaw = PI * 0.5f; player.pitch = 0.0f;     // +x 방향
+        addEnemy(glm::vec3(-13.0f, 0, 0));      // 정면 2
+        addEnemy(glm::vec3(-13.0f, 0, 6.0f));   // 옆 (맞으면 안 됨)
+        cap.meleeCd = 0.0f;
+        capMelee();
+        std::cout << "[test] melee front dead " << !enemies[0].alive << " side alive " << enemies[1].alive << "\n";
+        ck(!enemies[0].alive && enemies[1].alive, "melee cone");
+        step = 2; sf = frame;
+    }
+    if (phase == 3 && step == 2 && frame == sf + 5) {
+        shot(42);
+        enemies.clear();
+        for (float x : { -9.0f, -5.0f, -1.0f }) addEnemy(glm::vec3(x, 0, 0));
+        killsAt = kills;
+        capKeyE();
+        ck(cap.shield == SH_OUT, "E throws");
+        step = 3; sf = frame;
+    }
+    if (phase == 3 && step == 3 && (cap.shield == SH_WAIT || timedOut(900, "throw reaches end"))) {
+        std::cout << "[test] throw pierced " << kills - killsAt << " (3 in line), shield at " << pv(cap.sPos) << "\n";
+        ck(kills - killsAt >= 3, "throw pierces");
+        enemies.clear();
+        addEnemy(glm::vec3(-13.0f, 0, 0));
+        cap.meleeCd = 0.0f;
+        capMelee();     // 방패 없으면 약한 맨손: 한 대로 안 죽는다
+        std::cout << "[test] bare fist hp " << enemies[0].hp << " alive " << enemies[0].alive << " guard while out " << cap.guarding << "\n";
+        ck(enemies[0].alive && enemies[0].hp == 0.5f, "weak fist without shield");
+        aimAt(cap.sPos);
+        shot(43);
+        player.yaw = PI * 0.5f; player.pitch = 0.0f;
+        capKeyE();
+        ck(cap.shield == SH_BACK, "E recalls");
+        step = 4; sf = frame;
+    }
+    if (phase == 3 && step == 4 && (cap.shield == SH_HELD || timedOut(1200, "shield returns"))) {
+        std::cout << "[test] shield caught, E cooldown " << cap.eCd << "\n";
+        ck(cap.eCd > 0.0f, "E cooldown after catch");
+        enemies.clear(); bullets.clear();
+        testGuard = true;
+        step = 5; sf = frame;
+    }
+    if (phase == 3 && step == 5 && frame == sf + 3) {
+        ck(cap.guarding, "RMB guard");
+        glm::vec3 fwd = forwardDir();
+        bullets.push_back({ eyePosition() + fwd * 4.0f - glm::vec3(0, 0.3f, 0), -fwd * 15.0f, false, true, 6.0f });
+        shot(44);
+        step = 6; sf = frame;
+    }
+    if (phase == 3 && step == 6) {
+        bool reflected = false;
+        for (const auto& b : bullets) reflected = reflected || (b.alive && b.fromPlayer);
+        if (reflected || timedOut(200, "bullet reflected")) {
+            std::cout << "[test] guard reflected " << reflected << " guard hits " << cap.guardHits << " hp " << player.hp << "\n";
+            ck(reflected && cap.guardHits == 1 && player.hp == 1000, "reflect without damage");
+            testGuard = false;
+            bullets.clear(); enemies.clear();
+            for (glm::vec3 p : { glm::vec3(0, 0, 12), glm::vec3(10, 0, -10), glm::vec3(-4, 0, -16), glm::vec3(14, 0, 10), glm::vec3(6, 0, 16) }) addEnemy(p);
+            killsAt = kills;
+            cap.qCd = 0.0f;
+            capKeyQ();
+            ck(cap.shield == SH_RICO, "Q ricochet");
+            step = 7; sf = frame;
+        }
+    }
+    if (phase == 3 && step == 7 && (cap.shield == SH_HELD || timedOut(1500, "ricochet comes back"))) {
+        std::cout << "[test] ricochet killed " << kills - killsAt << "/5 bounces " << cap.bounces << " Q cooldown " << cap.qCd << "\n";
+        ck(kills - killsAt >= 3 && cap.qCd > 0.0f, "ricochet kills and cooldown");
+        revertTransform();
+        ck(transformItem == -1, "Z reverts");
+        cKeyDown();     // 꾹 → 휠
+        step = 8; sf = frame;
+    }
+    if (phase == 3 && step == 8 && (wheelOpen || timedOut(400, "wheel opens on hold"))) {
+        wheelMouse(0.0, -100.0);    // 위로 밀기 → 0 번 칸
+        std::cout << "[test] wheel open " << wheelOpen << " selected " << wheelSel << "\n";
+        ck(wheelSel == 0, "wheel selects top");
+        step = 9; sf = frame;
+    }
+    if (phase == 3 && step == 9 && frame == sf + 1) {
+        shot(45);
+        cKeyUp();
+        ck(transformItem == ITEM_CAPTAIN, "wheel equips");
+        std::cout << "[test] cap: " << (capFail ? "FAIL" : "ok") << "\n";
+        restartRun();
+        std::cout << "[test] restart -> cell " << currentCell << " cleared rooms " << std::count(std::begin(roomCleared), std::end(roomCleared), true)
+                  << " transform " << transformItem << " items " << (invSlots[0] >= 0) << "\n";
+        step = 10; sf = frame;
+    }
+    if (phase == 3 && step == 10 && frame == sf + 15) {
         std::cout << "[test] done\n";
         glfwSetWindowShouldClose(gWindow, true);
     }
 }
+

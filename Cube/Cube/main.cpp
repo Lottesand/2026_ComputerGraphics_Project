@@ -9,8 +9,8 @@ double lastMouseX = 0.0, lastMouseY = 0.0;
 bool firstMouse = true;
 
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+    if (key == GLFW_KEY_C && action == GLFW_RELEASE) { cKeyUp(); return; }   // C 를 뗄 때 장착 (짧게 / 휠)
     if (action != GLFW_PRESS) return;
-    if (key == GLFW_KEY_Q) { glfwSetWindowShouldClose(window, true); return; }
     if (augPicking) {
         // 증강 고르는 중: 1/2/3 으로 고르기 (마우스 클릭도 됨). 다른 키는 막는다
         if (key >= GLFW_KEY_1 && key <= GLFW_KEY_3) chooseAugment(key - GLFW_KEY_1);
@@ -27,6 +27,10 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
     if (key == GLFW_KEY_ESCAPE) glfwSetWindowShouldClose(window, true);
     else if (key == GLFW_KEY_R) restartRun();
     else if (key == GLFW_KEY_F) tryInteract();
+    else if (key == GLFW_KEY_C) cKeyDown();
+    else if (key == GLFW_KEY_Z) revertTransform();
+    else if (key == GLFW_KEY_E) capKeyE();
+    else if (key == GLFW_KEY_Q) capKeyQ();
     else if (key == GLFW_KEY_TAB && !rotAnimActive) openCubeView();
 }
 
@@ -65,6 +69,7 @@ void cursor_callback(GLFWwindow* window, double x, double y) {
     lastMouseX = x;
     lastMouseY = y;
     if (player.dead || fabs(dx) > 300.0 || fabs(dy) > 300.0) return;   // 커서 캡처 직후 튐 무시
+    if (wheelOpen) { wheelMouse(dx, dy); return; }      // 휠이 열려 있으면 시점 대신 칸 고르기
     player.yaw += (float)dx * 0.0022f;
     player.pitch = glm::clamp(player.pitch - (float)dy * 0.0022f, -1.45f, 1.45f);
 }
@@ -157,6 +162,7 @@ int main(int argc, char** argv) {
     tetraMesh = buildTetra();
     createInstancing();
     diskMesh = buildDisk(48);
+    starMesh = buildStar();
     glGenVertexArrays(1, &emptyVao);
     glGenVertexArrays(1, &hudVao);
     glGenBuffers(1, &hudVbo);
@@ -182,7 +188,9 @@ int main(int argc, char** argv) {
               << "우클릭 누르고 있기 = 줄 걸기(웹스윙). 달리는 기차에 걸면 매달려 다음 방으로\n"
               << "좌클릭 발사, Shift 누르고 있기 = 불릿타임(시간 감속)\n"
               << "방을 깨면 벽 중앙의 포털이 열린다. 큐브를 돌리면 포털 너머의 방이 바뀐다\n"
-              << "R 처음부터, ESC/Q 종료\n"
+              << "F 상호작용(증강, 이상 현상), C 짧게 = 첫 변신 아이템 / 꾹 = 휠, Z 변신 해제\n"
+              << "캡틴: 좌클릭 근접, 우클릭 가드(반사), E 방패 던지기/회수, Q 튕기기, Shift 달리기 + 착지 슬라이드\n"
+              << "R 처음부터, ESC 종료\n"
               << "Tab 큐브 화면: 바깥 드래그 = 큐브 전체 회전, 칸 위 드래그 = 한 면 회전\n"
               << "               더블클릭/Enter = 그 칸으로 이동, R = 큐브 초기화, Tab = 돌아가며 회전 적용\n";
 

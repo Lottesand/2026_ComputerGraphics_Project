@@ -252,6 +252,45 @@ void drawPortals(bool films) {
     }
 }
 
+// 캡틴 아메리카 방패: 바깥부터 빨강, 흰색, 빨강 고리, 파란 원, 흰 별. 지역 +Z 가 앞면, 반지름 1
+void drawCapShield(const glm::mat4& M) {
+    Material red{ glm::vec3(0.72f, 0.06f, 0.08f), 0.7f, 56.0f, 0.0f, 0 };
+    Material white{ glm::vec3(0.92f, 0.92f, 0.95f), 0.7f, 56.0f, 0.0f, 0 };
+    Material blue{ glm::vec3(0.06f, 0.14f, 0.52f), 0.7f, 56.0f, 0.0f, 0 };
+    Material steel{ glm::vec3(0.62f, 0.64f, 0.68f), 0.9f, 72.0f, 0.0f, 0 };
+    Material strap{ glm::vec3(0.28f, 0.16f, 0.08f), 0.1f, 8.0f, 0.0f, 0 };
+    auto disk = [&](float r, float z, const Material& m) {
+        drawMesh(diskMesh, M * glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, z)) * glm::scale(glm::mat4(1.0f), glm::vec3(r, r, 1.0f)), m);
+    };
+    // 뒷면(금속, -Z 를 향함)과 손잡이 끈 두 줄
+    drawMesh(diskMesh, M * glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, -0.03f)) * glm::rotate(glm::mat4(1.0f), PI, glm::vec3(0, 1, 0)) *
+                       glm::scale(glm::mat4(1.0f), glm::vec3(1.02f, 1.02f, 1.0f)), steel);
+    for (int s = -1; s <= 1; s += 2) drawMesh(cubeMesh, M * TRS({ 0, s * 0.16f, -0.07f }, { 0.75f, 0.09f, 0.06f }), strap);
+    disk(1.0f, 0.0f, red);
+    disk(0.8f, 0.006f, white);
+    disk(0.6f, 0.012f, red);
+    disk(0.4f, 0.018f, blue);
+    drawMesh(starMesh, M * glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, 0.024f)) * glm::scale(glm::mat4(1.0f), glm::vec3(0.38f, 0.38f, 1.0f)), white);
+}
+
+// 이상 현상(변신 아이템): 검은 핵이 돌고 자홍색 조각이 맴돌며, 멀리서도 보이게 빛기둥
+void drawEncounterItem() {
+    if (!encounterPlaced) return;
+    glm::vec3 c = encounterPos + glm::vec3(0, 1.5f + 0.2f * sinf(globalTime * 2.5f), 0);
+    Material core{ glm::vec3(0.05f, 0.0f, 0.08f), 1.0f, 90.0f, 0.4f, 0 };
+    Material glow{ glm::vec3(1.0f, 0.2f, 0.9f), 0.0f, 1.0f, 3.5f + 1.5f * sinf(globalTime * 7.0f), 0 };
+    Material beam{ glm::vec3(0.8f, 0.2f, 1.0f), 0.0f, 1.0f, 1.6f, 0 };
+    glm::mat4 R = glm::rotate(glm::mat4(1.0f), globalTime * 2.2f, glm::normalize(glm::vec3(0.3f, 1.0f, 0.2f)));
+    drawPart(glm::translate(glm::mat4(1.0f), c) * R * glm::scale(glm::mat4(1.0f), glm::vec3(0.7f)), core);
+    drawPart(glm::translate(glm::mat4(1.0f), c) * glm::inverse(R) * glm::scale(glm::mat4(1.0f), glm::vec3(0.45f)), glow);
+    for (int k = 0; k < 7; ++k) {
+        float a = globalTime * (1.5f + k * 0.2f) + k * 0.9f, rr = 1.0f + 0.15f * k;
+        glm::vec3 p = c + glm::vec3(cosf(a) * rr, sinf(a * 1.7f) * 0.6f, sinf(a) * rr);
+        if (!shadowPass) drawMesh(tetraMesh, glm::translate(glm::mat4(1.0f), p) * glm::rotate(glm::mat4(1.0f), a * 3.0f, glm::vec3(1, 1, 0)) * glm::scale(glm::mat4(1.0f), glm::vec3(0.22f)), glow);
+    }
+    drawPart(TRS(encounterPos + glm::vec3(0, 20.0f, 0), glm::vec3(0.12f, 40.0f, 0.12f)), beam);
+}
+
 // 방을 깨면 나오는 증강 물체: 받침대 + 떠서 도는 금빛 결정 + 주위를 도는 작은 조각 4개
 void drawAugmentPickup() {
     if (!augPickupActive) return;
@@ -287,6 +326,11 @@ void drawWorld(bool withEffects) {
     drawTrains();
     drawHoles();
     drawAugmentPickup();
+    drawEncounterItem();
+    // 던진 방패: 원반처럼 눕혀서 돈다
+    if (transformItem == ITEM_CAPTAIN && cap.shield != SH_HELD)
+        drawCapShield(glm::translate(glm::mat4(1.0f), cap.sPos) * orientTo(glm::vec3(0, 1, 0)) *
+                      glm::rotate(glm::mat4(1.0f), cap.spin, glm::vec3(0, 0, 1)) * glm::scale(glm::mat4(1.0f), glm::vec3(0.75f)));
     if (!shadowPass) drawPortals(false);
     if (withEffects && grap.active) {
         glm::vec3 eye = eyePosition(), fwd = forwardDir();
@@ -333,6 +377,7 @@ void uploadLights(glm::vec3 eye) {
         for (int i = 0; i < tracks[k].cars; ++i)
             if (carVisible(tracks[k], carS(tracks[k], i)))
                 cand.push_back({ glm::vec3(carWorld(k, i)[3]), glm::vec3(1.0f, 0.72f, 0.42f) * 1.6f, 10.0f });
+    if (encounterPlaced) cand.push_back({ encounterPos + glm::vec3(0, 1.6f, 0), glm::vec3(1.0f, 0.25f, 0.9f) * 3.0f, 11.0f });
     if (augPickupActive) cand.push_back({ augPickupPos + glm::vec3(0, 1.8f, 0), glm::vec3(1.0f, 0.78f, 0.35f) * 3.0f, 9.0f });
     int n = std::min((int)cand.size(), MAX_LIGHTS);
     std::partial_sort(cand.begin(), cand.begin() + n, cand.end(), [&](const LightSrc& a, const LightSrc& b) {
@@ -375,10 +420,36 @@ void drawTransparent(glm::vec3 eye) {
     glDisable(GL_BLEND);
 }
 
+// 캡틴 1인칭: 오른손 방패 + 왼손 주먹. 근접은 번갈아 앞으로 내지르고, 가드는 방패를 화면 가운데로 세운다
+static void drawCapViewModel(const glm::mat4& invView, float bx, float by) {
+    Material glove{ glm::vec3(0.42f, 0.16f, 0.1f), 0.2f, 16.0f, 0.0f, 0 };
+    Material sleeve{ glm::vec3(0.08f, 0.14f, 0.42f), 0.3f, 24.0f, 0.0f, 0 };
+    float p = cap.meleeT > 0.0f ? 1.0f - cap.meleeT / 0.22f : 0.0f, punch = sinf(p * PI);
+    bool held = cap.shield == SH_HELD;
+    auto fist = [&](float side, float lp) {
+        glm::mat4 F = invView * glm::translate(glm::mat4(1.0f), glm::vec3(side * (0.27f - 0.12f * lp) + bx, -0.3f - by + 0.05f * lp, -0.55f - 0.4f * lp));
+        drawMesh(cubeMesh, F * glm::scale(glm::mat4(1.0f), glm::vec3(0.1f, 0.1f, 0.13f)), glove);
+        drawMesh(cubeMesh, F * TRS({ 0, 0, 0.17f }, { 0.11f, 0.11f, 0.22f }), sleeve);
+    };
+    fist(-1.0f, cap.meleeSide == 1 ? punch : 0.0f);
+    if (!held) { fist(1.0f, 0.0f); return; }
+    float sp = cap.meleeSide == 0 ? punch : 0.0f;
+    glm::mat4 S;
+    if (cap.guarding)
+        S = invView * glm::translate(glm::mat4(1.0f), glm::vec3(0.02f, -0.12f, -0.5f)) * glm::rotate(glm::mat4(1.0f), PI, glm::vec3(0, 1, 0)) *
+            glm::scale(glm::mat4(1.0f), glm::vec3(0.26f));
+    else
+        S = invView * glm::translate(glm::mat4(1.0f), glm::vec3(0.34f - 0.14f * sp + bx, -0.3f - by + 0.06f * sp, -0.66f - 0.35f * sp)) *
+            glm::rotate(glm::mat4(1.0f), -0.6f + 0.5f * sp, glm::vec3(0, 1, 0)) * glm::rotate(glm::mat4(1.0f), 0.15f, glm::vec3(1, 0, 0)) *
+            glm::scale(glm::mat4(1.0f), glm::vec3(0.2f));
+    drawCapShield(S);
+}
+
 void drawViewModel(const glm::mat4& view) {
     glm::mat4 invView = glm::inverse(view);
     float bx = player.onGround ? cosf(player.bobPhase) * 0.012f : 0.0f;
     float by = player.onGround ? fabsf(sinf(player.bobPhase)) * 0.012f : 0.0f;
+    if (transformItem == ITEM_CAPTAIN && !player.dead) { drawCapViewModel(invView, bx, by); return; }
     float lower = player.dead ? std::min(1.0f, player.deadT) * 0.5f : 0.0f;
     glm::mat4 gun = invView * glm::translate(glm::mat4(1.0f), glm::vec3(0.21f + bx, -0.19f - by - lower, -0.5f + player.recoil * 0.05f));
     gun = glm::rotate(gun, player.recoil * 0.3f, glm::vec3(1, 0, 0));

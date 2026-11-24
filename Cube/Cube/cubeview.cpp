@@ -194,6 +194,7 @@ void applyCubeToWorld() {
     worldOrient = target;
     rebuildWorld();
     placeAugmentPickup();   // 방이 돌면 바닥이 바뀌므로 증강 물체도 새 바닥의 빈 자리로
+    placeEncounter();
 
     auto rot = [&](glm::vec3 p) { return ROOM_C + r * (p - ROOM_C); };
     // 눈 위치를 기준으로 옮겨서 회전 연출이 끊기지 않게 한다
@@ -311,6 +312,13 @@ void renderCubeView(int w, int h) {
     glm::mat4 curM = cm;
     if (sliceAxis >= 0 && cubies[currentCell].pos[sliceAxis] == sliceLayer) curM = curM * sliceSpin();
     drawBoxEdges(curM, glm::vec3(cubies[currentCell].pos), glm::vec3(0.5f), 0.03f, glm::vec3(0.3f, 0.95f, 1.0f));
+    // 이상 현상(변신 아이템)이 나타난 칸: 자홍색으로 깜빡이는 굵은 테두리
+    if (encounterCell >= 0) {
+        glm::mat4 em = cm;
+        if (sliceAxis >= 0 && cubies[encounterCell].pos[sliceAxis] == sliceLayer) em = em * sliceSpin();
+        float pulse = 0.6f + 0.4f * sinf(globalTime * 6.0f);
+        drawBoxEdges(em, glm::vec3(cubies[encounterCell].pos), glm::vec3(0.53f), 0.05f, glm::vec3(1.0f, 0.2f, 0.9f) * pulse);
+    }
 
     // 중력 방향(큐브 공간의 -Y)은 큐브와 함께 돌며 항상 아래쪽 칸을 가리킨다
     drawCubePart(cm * TRS(glm::vec3(0, -2.05f, 0), glm::vec3(0.04f, 0.8f, 0.04f)), glm::vec3(1.0f), 0.5f);

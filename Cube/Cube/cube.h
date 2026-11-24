@@ -99,6 +99,7 @@ struct Enemy {
     float yaw, shootCd, walkT, strafe, spawnT, aimT, vy;
     bool alive;
     bool rusher;            // 근접형: 총 대신 달려와서 내려친다
+    float hp;               // 기본 1. 총알·방패는 1, 방패 없는 맨손은 0.5
     float atkT, atkCd;      // 내려치기 준비 남은 시간(팔을 든 상태), 다음 공격까지
 };
 
@@ -285,6 +286,9 @@ struct Batch2D {
         float v[6][2] = { { x, y }, { x + w, y }, { x + w, y + h }, { x, y }, { x + w, y + h }, { x, y + h } };
         for (auto& p : v) tris.insert(tris.end(), { p[0], p[1], c.r, c.g, c.b, c.a });
     }
+    void tri(glm::vec2 a, glm::vec2 b, glm::vec2 c, const glm::vec4& col) {
+        for (glm::vec2 p : { a, b, c }) tris.insert(tris.end(), { p.x, p.y, col.r, col.g, col.b, col.a });
+    }
 };
 
 
@@ -432,6 +436,38 @@ extern glm::mat4 cubeVP;
 extern double lastMouseX, lastMouseY;
 extern bool firstMouse;
 
+// ===================================================================
+// 변신 아이템 (랜덤 인카운터로 얻고 C 휠로 장착, Z 로 해제)
+// ===================================================================
+const int ITEM_COUNT = 1;
+enum ItemId { ITEM_CAPTAIN = 0 };
+enum ShieldMode { SH_HELD = 0, SH_OUT, SH_WAIT, SH_BACK, SH_RICO, SH_HOME };
+
+struct CapState {
+    float meleeT = 0.0f, meleeCd = 0.0f;    // 근접 동작 남은 시간, 다음 공격까지
+    int meleeSide = 0;                      // 0 오른손 방패, 1 왼손 주먹
+    bool guarding = false;
+    float guardT = 0.0f, guardLock = 0.0f, guardRegen = 0.0f;
+    int guardHits = 0;
+    int shield = SH_HELD;
+    glm::vec3 sPos{ 0.0f }, sDir{ 0, 0, -1 }, sStart{ 0.0f };
+    float sTravel = 0.0f, sTime = 0.0f, spin = 0.0f;
+    int bounces = 0;
+    bool retToStart = true;
+    float eCd = 0.0f, qCd = 0.0f;
+};
+
+extern const char* ITEM_NAMES[ITEM_COUNT];
+extern int invSlots[8], transformItem, encounterCell, encounterItem, wheelSel;
+extern bool encounterPlaced, wheelOpen, testGuard;
+extern glm::vec3 encounterPos, slideVel;
+extern float encounterBannerT, slideT;
+extern glm::vec2 wheelVec;
+extern CapState cap;
+extern const int GUARD_MAX;
+extern const float E_COOLDOWN, Q_COOLDOWN;
+extern Mesh starMesh;
+
 extern Stats stats;
 extern std::vector<Augment> augments;
 extern std::vector<int> ownedAugments;
@@ -441,6 +477,31 @@ extern int augOffer[3], augOfferCount;
 extern const int AUG_LINE_COUNT;
 
 // ---------------- 함수 ----------------
+bool capActive();
+void resetTransform();
+void placeEncounter();
+void startEncounter(int cell, int item);
+void maybeStartEncounter();
+bool nearEncounter();
+void collectEncounter();
+void equipItem(int item);
+void revertTransform();
+void equipFirstItem();
+void cKeyDown();
+void cKeyUp();
+void updateWheel();
+void wheelMouse(double dx, double dy);
+bool capGuardBlocks(glm::vec3 incoming);
+void guardHit();
+void capMelee();
+void capKeyE();
+void capKeyQ();
+void updateShield(float dt);
+void updateCaptain(float dt);
+void onEnterRoomTransform();
+void damageEnemy(Enemy& e, float dmg, glm::vec3 hitDir);
+Mesh buildStar();
+void drawCapShield(const glm::mat4& M);
 void initAugments();
 void resetAugments();
 int augLineTier(int line);

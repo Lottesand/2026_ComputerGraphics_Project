@@ -86,6 +86,65 @@ static void drawAugmentPicker(Batch2D& b, int w, int h) {
     }
 }
 
+// 인벤토리 휠 (C 꾹): 8칸, 맨 위가 0 번이고 시계방향. 마우스를 민 방향의 칸이 밝아진다
+static void drawWheel(Batch2D& b, int w, int h) {
+    float ui = h / 720.0f, cx = w * 0.5f, cy = h * 0.5f, R0 = 70.0f * ui, R1 = 230.0f * ui;
+    auto P = [&](float a, float r) { return glm::vec2(cx + sinf(a) * r, cy + cosf(a) * r); };
+    for (int i = 0; i < 8; ++i) {
+        float a0 = (i - 0.5f) * PI / 4.0f, a1 = (i + 0.5f) * PI / 4.0f;
+        glm::vec4 fill = i == wheelSel ? glm::vec4(1, 1, 1, 0.28f) : glm::vec4(0, 0, 0, 0.42f);
+        for (int k = 0; k < 6; ++k) {
+            float u0 = a0 + (a1 - a0) * k / 6.0f, u1 = a0 + (a1 - a0) * (k + 1) / 6.0f;
+            b.tri(P(u0, R0), P(u0, R1), P(u1, R1), fill);
+            b.tri(P(u0, R0), P(u1, R1), P(u1, R0), fill);
+        }
+        // 칸 사이 경계선
+        glm::vec2 e0 = P(a0, R0), e1 = P(a0, R1), n = glm::normalize(glm::vec2(e1.y - e0.y, e0.x - e1.x)) * (1.2f * ui);
+        b.tri(e0 - n, e1 - n, e1 + n, glm::vec4(1, 1, 1, 0.6f));
+        b.tri(e0 - n, e1 + n, e0 + n, glm::vec4(1, 1, 1, 0.6f));
+        glm::vec2 lp = P(i * PI / 4.0f, (R0 + R1) * 0.5f);
+        bool has = invSlots[i] >= 0;
+        std::string label = has ? ITEM_NAMES[invSlots[i]] : "EMPTY";
+        glm::vec4 col = has ? (i == wheelSel ? glm::vec4(1.0f, 0.85f, 0.3f, 1.0f) : glm::vec4(1, 1, 1, 0.95f)) : glm::vec4(1, 1, 1, 0.3f);
+        float s = 1.3f * ui;
+        if (label.size() > 10) {
+            size_t sp = label.find(' ');
+            if (sp != std::string::npos) {
+                drawTextCentered(b, lp.x, lp.y + 2 * ui, s, label.substr(0, sp), col);
+                drawTextCentered(b, lp.x, lp.y - 12 * ui, s, label.substr(sp + 1), col);
+                continue;
+            }
+        }
+        drawTextCentered(b, lp.x, lp.y - 4 * ui, s, label, col);
+    }
+    // 가운데 고리
+    for (int k = 0; k < 48; ++k) {
+        float u0 = 2.0f * PI * k / 48.0f, u1 = 2.0f * PI * (k + 1) / 48.0f;
+        b.tri(P(u0, R0 - 6 * ui), P(u0, R0), P(u1, R0), glm::vec4(1, 1, 1, 0.85f));
+        b.tri(P(u0, R0 - 6 * ui), P(u1, R0), P(u1, R0 - 6 * ui), glm::vec4(1, 1, 1, 0.85f));
+    }
+    drawTextCentered(b, cx, cy - 5 * ui, 1.4f * ui, "ITEMS", glm::vec4(1, 1, 1, 0.8f));
+}
+
+// 캡틴 HUD: 가드 내구도 칸, E/Q 쿨타임, 방패 상태
+static void drawCapHUD(Batch2D& b, int w, int h) {
+    float ui = h / 720.0f, cx = w * 0.5f;
+    glm::vec4 blue(0.35f, 0.6f, 1.0f, 1.0f), red(1.0f, 0.3f, 0.25f, 1.0f), white(1, 1, 1, 0.9f);
+    float sw = 34.0f * ui, sh = 8.0f * ui, gap = 5.0f * ui, total = GUARD_MAX * sw + (GUARD_MAX - 1) * gap, by = 34.0f * ui;
+    bool broken = cap.guardLock > 1.0f;
+    for (int i = 0; i < GUARD_MAX; ++i)
+        b.rect(cx - total * 0.5f + i * (sw + gap), by, sw, sh, broken ? glm::vec4(0.3f, 0.1f, 0.1f, 0.7f)
+                                                               : (i < GUARD_MAX - cap.guardHits ? (cap.guarding ? white : blue) : glm::vec4(0, 0, 0, 0.45f)));
+    std::string gl = broken ? "GUARD BROKEN" : (cap.shield != SH_HELD ? "NO SHIELD - BARE FISTS" : (cap.guarding ? "GUARDING - REFLECT" : "GUARD [RMB]"));
+    drawTextCentered(b, cx, by + sh + 6 * ui, 1.6f * ui, gl, broken ? red : blue);
+    std::string es = cap.shield == SH_OUT || cap.shield == SH_WAIT ? "[E] RECALL" : (cap.shield == SH_BACK ? "[E] RETURNING" :
+                     (cap.eCd > 0.0f ? "[E] " + std::to_string((int)ceilf(cap.eCd)) : "[E] THROW"));
+    std::string qs = cap.shield == SH_RICO || cap.shield == SH_HOME ? "[Q] BOUNCING" : (cap.qCd > 0.0f ? "[Q] " + std::to_string((int)ceilf(cap.qCd)) : "[Q] RICOCHET");
+    bool eReady = cap.shield == SH_HELD && cap.eCd <= 0.0f, qReady = cap.shield == SH_HELD && cap.qCd <= 0.0f;
+    drawText(b, w - textWidth(es, 2.0f * ui) - 24 * ui, 60 * ui, 2.0f * ui, es, eReady ? blue : white);
+    drawText(b, w - textWidth(qs, 2.0f * ui) - 24 * ui, 32 * ui, 2.0f * ui, qs, qReady ? blue : white);
+}
+
 void renderHUD(int w, int h) {
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
@@ -108,11 +167,16 @@ void renderHUD(int w, int h) {
         b.rect(cx - t * 0.5f, cy - t * 0.5f, t, t, cc);
     }
 
-    // 집중 게이지
-    float bw = 240.0f * ui, bh = 7.0f * ui, bx = cx - bw * 0.5f, by = 34.0f * ui;
-    b.rect(bx - 2 * ui, by - 2 * ui, bw + 4 * ui, bh + 4 * ui, glm::vec4(0, 0, 0, 0.45f));
-    b.rect(bx, by, bw * focusEnergy, bh, focusActive ? glm::vec4(1, 1, 1, 0.95f) : glm::vec4(cyan.r, cyan.g, cyan.b, 0.85f));
-    drawTextCentered(b, cx, by + bh + 6 * ui, 1.6f * ui, "BULLET TIME [SHIFT]", glm::vec4(cyan.r, cyan.g, cyan.b, 0.8f));
+    if (transformItem == ITEM_CAPTAIN) {
+        drawCapHUD(b, w, h);
+        drawText(b, 16 * ui, h - 70 * ui, 1.6f * ui, "CAPTAIN AMERICA   [Z] REVERT", glm::vec4(0.45f, 0.65f, 1.0f, 0.95f));
+    } else {
+        // 집중 게이지
+        float bw = 240.0f * ui, bh = 7.0f * ui, bx = cx - bw * 0.5f, by = 34.0f * ui;
+        b.rect(bx - 2 * ui, by - 2 * ui, bw + 4 * ui, bh + 4 * ui, glm::vec4(0, 0, 0, 0.45f));
+        b.rect(bx, by, bw * focusEnergy, bh, focusActive ? glm::vec4(1, 1, 1, 0.95f) : glm::vec4(cyan.r, cyan.g, cyan.b, 0.85f));
+        drawTextCentered(b, cx, by + bh + 6 * ui, 1.6f * ui, "BULLET TIME [SHIFT]", glm::vec4(cyan.r, cyan.g, cyan.b, 0.8f));
+    }
 
     for (int i = 0; i < stats.maxHp; ++i)
         b.rect((24 + i * 22) * ui, 28 * ui, 16 * ui, 16 * ui, i < player.hp ? orange : glm::vec4(0, 0, 0, 0.4f));
@@ -131,7 +195,11 @@ void renderHUD(int w, int h) {
         drawTextCentered(b, cx, h * 0.68f, 6.0f * ui, "WAVE " + std::to_string(wave), glm::vec4(1, 1, 1, std::min(1.0f, waveBannerT)));
     if (grap.onTrain)
         drawTextCentered(b, cx, h * 0.36f, 1.8f * ui, "HOLD RMB - RIDING TO THE NEXT ROOM", glm::vec4(1.0f, 0.85f, 0.2f, 1.0f));
-    if (helpT > 0.0f) {
+    if (helpT > 0.0f && transformItem == ITEM_CAPTAIN) {
+        glm::vec4 hc(1, 1, 1, std::min(1.0f, helpT) * 0.85f);
+        drawTextCentered(b, cx, h * 0.26f, 1.7f * ui, "LMB SHIELD / FIST   HOLD RMB GUARD + REFLECT   E THROW / RECALL", hc);
+        drawTextCentered(b, cx, h * 0.26f - 20 * ui, 1.7f * ui, "Q RICOCHET   SHIFT SPRINT + LANDING SLIDE   Z REVERT", hc);
+    } else if (helpT > 0.0f) {
         glm::vec4 hc(1, 1, 1, std::min(1.0f, helpT) * 0.85f);
         drawTextCentered(b, cx, h * 0.26f, 1.7f * ui, "WASD MOVE   SPACE JUMP   CTRL SPRINT   HOLD RMB WEB SWING", hc);
         drawTextCentered(b, cx, h * 0.26f - 20 * ui, 1.7f * ui, "LMB SHOOT   HOLD SHIFT BULLET TIME   R RESTART", hc);
@@ -142,6 +210,16 @@ void renderHUD(int w, int h) {
     }
     drawText(b, 16 * ui, h - 48 * ui, 1.4f * ui, "TAB CUBE", glm::vec4(1, 1, 1, 0.6f));
     if (rotAnimActive) drawTextCentered(b, cx, h * 0.68f, 3.0f * ui, "WORLD ROTATING", glm::vec4(1.0f, 0.85f, 0.2f, 1.0f));
+    // 이상 현상 알림 (아이템 이름은 숨긴다)
+    if (encounterCell >= 0) {
+        bool here = currentCell == encounterCell;
+        std::string es = here ? "SOMETHING STRANGE IS IN THIS ROOM" : "STRANGE PHENOMENON IN ROOM " + std::to_string(encounterCell) + "   [TAB]";
+        float big = encounterBannerT > 0.0f ? 2.6f : 1.8f;
+        drawTextCentered(b, cx, h - 34 * ui, big * ui, es, glm::vec4(1.0f, 0.35f, 0.95f, 0.75f + 0.25f * sinf(globalTime * 5.0f)));
+    }
+    if (nearEncounter())
+        drawTextCentered(b, cx, h * 0.38f, 2.4f * ui, "[F] INVESTIGATE", glm::vec4(1.0f, 0.4f, 0.95f, 1.0f));
+    if (wheelOpen) drawWheel(b, w, h);
     if (nearAugmentPickup() && !augPicking)
         drawTextCentered(b, cx, h * 0.38f, 2.4f * ui, "[F] CHOOSE AUGMENT", glm::vec4(1.0f, 0.82f, 0.35f, 1.0f));
     if (augPicking) drawAugmentPicker(b, w, h);
@@ -166,6 +244,10 @@ void renderCubeHUD(int w, int h) {
     drawTextCentered(b, w * 0.5f, h - 44 * ui, 2.6f * ui, "CUBE", white);
     glm::vec2 cur = toFb(glm::vec3(cubies[currentCell].pos));
     drawTextCentered(b, cur.x, cur.y - 3 * ui, 1.3f * ui, "YOU", cyan);
+    if (encounterCell >= 0) {
+        glm::vec2 ep = toFb(glm::vec3(cubies[encounterCell].pos));
+        drawTextCentered(b, ep.x, ep.y + 10 * ui, 1.3f * ui, "STRANGE", glm::vec4(1.0f, 0.35f, 0.95f, 1.0f));
+    }
     glm::vec2 g = toFb(glm::vec3(0, -2.7f, 0));
     drawTextCentered(b, g.x, g.y - 6 * ui, 1.3f * ui, "GRAVITY", white);
 

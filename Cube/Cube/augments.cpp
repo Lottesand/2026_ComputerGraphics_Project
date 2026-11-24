@@ -83,6 +83,7 @@ bool nearAugmentPickup() {
 
 // F: 증강 물체 가까이에서 누르면 카드 3장을 연다
 void tryInteract() {
+    if (nearEncounter()) { collectEncounter(); return; }
     if (!nearAugmentPickup()) return;
     startAugmentPick();
     if (!augPicking) { augTaken[currentCell] = true; augPickupActive = false; }   // 더 고를 게 없음

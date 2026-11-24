@@ -2,7 +2,7 @@
 #include "cube.h"
 
 std::mt19937 rng(777);
-Mesh diskMesh;
+Mesh diskMesh, starMesh;
 
 float frand(float a, float b) { std::uniform_real_distribution<float> d(a, b); return d(rng); }
 
@@ -118,6 +118,17 @@ Mesh buildTetra() {
 }
 
 // 구멍(포털) 그리기용 원판: 반지름 1, +Z 를 향함
+// 꼭짓점 5개 별 (반지름 1, 한 꼭짓점이 위, 앞면 +Z)
+Mesh buildStar() {
+    std::vector<float> d;
+    for (int i = 0; i < 10; ++i) {
+        float a0 = PI * 0.5f + PI * i / 5.0f, a1 = PI * 0.5f + PI * (i + 1) / 5.0f;
+        float r0 = i % 2 == 0 ? 1.0f : 0.382f, r1 = i % 2 == 0 ? 0.382f : 1.0f;
+        pushTri(d, glm::vec3(0.0f), glm::vec3(cosf(a0) * r0, sinf(a0) * r0, 0.0f), glm::vec3(cosf(a1) * r1, sinf(a1) * r1, 0.0f));
+    }
+    return uploadMesh(d);
+}
+
 Mesh buildDisk(int segments) {
     std::vector<float> d;
     for (int i = 0; i < segments; ++i) {

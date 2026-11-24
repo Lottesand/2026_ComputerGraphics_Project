@@ -10,7 +10,7 @@ glm::vec3 forwardDir() {
 
 glm::vec3 eyePosition() {
     float bob = player.onGround ? sinf(player.bobPhase * 2.0f) * 0.035f : 0.0f;
-    glm::vec3 e = player.pos + glm::vec3(0, EYE_H - player.landDip + bob, 0);
+    glm::vec3 e = player.pos + glm::vec3(0, EYE_H - player.landDip + bob - (slideT > 0.0f ? 0.55f : 0.0f), 0);   // 슬라이드 중엔 눈이 낮다
     if (player.dead) e.y = player.pos.y + std::max(0.4f, EYE_H - player.deadT * 1.2f);
     return e;
 }
@@ -23,7 +23,8 @@ void spawnSparks(glm::vec3 p, glm::vec3 color, int n, float speed) {
 void spawnWave() {
     ++wave;
     waveBannerT = 2.5f;
-    int count = 6 + 6 * wave;      // 12, 18, 24
+    // 12, 18, 24 에 증강을 하나 먹을 때마다 6% 씩 더 (26개면 약 2.5배)
+    int count = (int)std::lround((6 + 6 * wave) * (1.0f + 0.06f * (float)ownedAugments.size()));
     for (int i = 0; i < count; ++i) {
         // 방이 회전하면 구조물 위치가 바뀌므로 빈 자리를 찾아 스폰
         glm::vec3 spot(0.0f);
@@ -40,6 +41,7 @@ void spawnWave() {
         e.strafe = frand(0, 1) < 0.5f ? -1.0f : 1.0f;
         e.alive = true;
         e.rusher = i % 2 == 1;     // 절반은 달려드는 근접형
+        e.hp = 1.0f;
         enemies.push_back(e);
     }
 }
@@ -174,12 +176,14 @@ void travelTo(int id, glm::vec3 D, bool viaTrain) {
     player.onGround = false;
     portalArmed = false;
     placeAugmentPickup();
+    onEnterRoomTransform();
     bannerText = (id == HUB_CELL ? std::string("HUB") : "ROOM " + std::to_string(id)) + " - " + styleName(styleForCell(id));
     bannerT = 2.5f;
 }
 
 void restartRun() {
     resetAugments();
+    resetTransform();
     initCube();
     for (bool& c : roomCleared) c = false;
     roomCleared[HUB_CELL] = true;
@@ -305,6 +309,12 @@ void killEnemy(Enemy& e, glm::vec3 hitDir) {
     if (shards.size() > 700) shards.erase(shards.begin(), shards.begin() + (shards.size() - 700));
 }
 
+void damageEnemy(Enemy& e, float dmg, glm::vec3 hitDir) {
+    if (!e.alive) return;
+    e.hp -= dmg;
+    if (e.hp <= 0.0f) killEnemy(e, hitDir);
+}
+
 void hurtPlayer() {
     if (player.dead || player.hurtT > 0.5f) return;    // 맞은 직후 약 0.3초 무적 (여럿에게 한꺼번에 맞아 즉사하지 않게)
     --player.hp;
@@ -369,11 +379,15 @@ void updatePlayer(float dt) {
     if (glfwGetKey(gWindow, GLFW_KEY_S) == GLFW_PRESS) wish -= f;
     if (glfwGetKey(gWindow, GLFW_KEY_D) == GLFW_PRESS) wish += r;
     if (glfwGetKey(gWindow, GLFW_KEY_A) == GLFW_PRESS) wish -= r;
-    float speed = (glfwGetKey(gWindow, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ? 8.5f * stats.sprintMul : 5.5f) * stats.moveMul;
+    // 변신 중엔 Shift 도 달리기 (기본 상태의 Shift 는 불릿타임)
+    bool shiftKey = glfwGetKey(gWindow, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
+    bool sprint = glfwGetKey(gWindow, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS || (capActive() && shiftKey);
+    float speed = (sprint ? 8.5f * stats.sprintMul : 5.5f) * stats.moveMul;
+    if (capActive() && cap.guarding) speed *= 0.5f;
     if (glm::length(wish) > 0.01f) wish = glm::normalize(wish) * speed;
 
     // 우클릭을 누르는 순간 줄을 쏘고, 떼면 놓는다
-    bool hold = glfwGetMouseButton(gWindow, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS || testGrapple;
+    bool hold = (glfwGetMouseButton(gWindow, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS || testGrapple) && !capActive();   // 변신 중 우클릭은 가드
     if (hold && !grappleWasDown) tryGrapple();
     if (!hold && grap.active) {
         // 스윙 중에 놓으면 진행 방향 + 위로 살짝 튕겨 나간다 (다음 줄을 걸 시간을 번다)
@@ -393,7 +407,12 @@ void updatePlayer(float dt) {
     }
 
     glm::vec2 hv(player.vel.x, player.vel.z), target(wish.x, wish.z);
-    if (player.onGround) {
+    if (player.onGround && slideT > 0.0f) {
+        // 슬라이드: 조작은 안 듣고 미끄러지며 점점 느려진다
+        slideT -= dt;
+        hv = glm::vec2(slideVel.x, slideVel.z);
+        slideVel *= std::max(0.0f, 1.0f - 1.6f * dt);
+    } else if (player.onGround) {
         hv += (target - hv) * std::min(1.0f, 14.0f * dt);
     } else if (glm::length(target) > 0.01f) {
         // 공중에서는 원하는 방향으로만 가속하고 속도를 깎지 않는다 → 스윙 관성이 유지된다
@@ -408,6 +427,7 @@ void updatePlayer(float dt) {
     if (player.onGround && glfwGetKey(gWindow, GLFW_KEY_SPACE) == GLFW_PRESS) {
         player.vel.y = stats.jump;
         player.onGround = false;
+        slideT = 0.0f;      // 슬라이드 중 점프 = 캔슬 (미끄러지던 속도는 그대로 갖고 뜬다)
     }
     player.vel.y = std::max(player.vel.y - 18.0f * dt, -30.0f);
 
@@ -462,10 +482,17 @@ void updatePlayer(float dt) {
         player.pos.y = ground;
         player.vel.y = 0.0f;
         player.onGround = true;
+        // 변신 중 Shift 를 누른 채 착지하면 그 기세로 슬라이드
+        float hs = glm::length(glm::vec2(player.vel.x, player.vel.z));
+        if (!wasGround && capActive() && shiftKey && hs > 3.0f) {
+            slideT = 0.6f;
+            slideVel = glm::vec3(player.vel.x, 0, player.vel.z) / hs * std::max(hs * 1.15f, 11.0f);
+        }
     } else {
         player.onGround = false;
     }
 
+    if (capActive()) { updateCaptain(dt); return; }
     bool fire = glfwGetMouseButton(gWindow, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
     if (fire && player.fireCd <= 0.0f) firePlayer();
 }
@@ -510,7 +537,10 @@ void updateEnemies(float dt) {
                 if (e.atkT <= 0.0f) {
                     e.atkT = 0.0f;
                     e.atkCd = 1.0f;
-                    if (!player.dead && dist < 2.0f && vdist < 1.6f) hurtPlayer();
+                    if (!player.dead && dist < 2.0f && vdist < 1.6f) {
+                        if (capGuardBlocks(dir)) guardHit();    // 방패 가드로 막음
+                        else hurtPlayer();
+                    }
                     spawnSparks(e.pos + dir * 0.8f + glm::vec3(0, 1.0f, 0), glm::vec3(1.0f, 0.5f, 0.1f), 8, 3.0f);
                 }
             } else if (!player.dead) {
@@ -581,6 +611,16 @@ void updateBullets(float dt) {
         } else if (!player.dead) {
             glm::vec3 end = p0 + (p1 - p0) * tHitT;
             if (segHitsCylinder(p0, end, player.pos, PLAYER_R, PLAYER_H)) {
+                if (capGuardBlocks(dir)) {
+                    // 방패 가드: 바라보는 방향으로 되쏘아 보낸다 (적도 맞힌다)
+                    guardHit();
+                    b.fromPlayer = true;
+                    b.vel = forwardDir() * 45.0f;
+                    b.pos = eyePosition() + forwardDir() * 0.8f;
+                    b.life = 3.0f;
+                    spawnSparks(b.pos, glm::vec3(0.8f, 0.9f, 1.0f), 8, 3.0f);
+                    continue;
+                }
                 hurtPlayer();
                 b.alive = false;
             }
@@ -635,7 +675,7 @@ void update(float realDt) {
     bannerT -= realDt;
 
     // 집중 모드: 세계 시간은 크게 느려지고, 플레이어는 덜 느려짐
-    focusActive = !player.dead && focusEnergy > 0.02f &&
+    focusActive = !player.dead && !capActive() && focusEnergy > 0.02f &&
                   glfwGetKey(gWindow, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
     if (focusActive) focusEnergy = std::max(0.0f, focusEnergy - realDt * stats.focusDrain);
     else focusEnergy = std::min(1.0f, focusEnergy + realDt * stats.focusRegen);
@@ -647,6 +687,9 @@ void update(float realDt) {
 
     trainTime += worldDt;
     updatePlayer(playerDt);
+    updateShield(playerDt);
+    updateWheel();
+    encounterBannerT -= realDt;
     updatePortals();
     updateEnemies(worldDt);
     updateBullets(worldDt);
@@ -661,6 +704,7 @@ void update(float realDt) {
             player.hp = std::min(stats.maxHp, player.hp + stats.clearHeal);
             bannerText = "ROOM CLEAR - TAKE THE AUGMENT [F]";
             placeAugmentPickup();
+            maybeStartEncounter();
         } else if (wave < ROOM_WAVES && (int)enemies.size() <= WAVE_NEXT_AT) {
             waveTimer -= realDt;
             if (waveTimer <= 0.0f) {
@@ -670,5 +714,5 @@ void update(float realDt) {
         }
     }
     Grapple probe;
-    grappleAimOK = !grap.active && !player.dead && castGrapple(eyePosition(), forwardDir(), probe);
+    grappleAimOK = !grap.active && !player.dead && !capActive() && castGrapple(eyePosition(), forwardDir(), probe);
 }
