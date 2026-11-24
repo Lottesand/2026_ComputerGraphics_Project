@@ -234,78 +234,11 @@ void shotScript(int frame, int w, int h) {
             std::cout << "[test] style shot cell " << styleCells[k] << " " << styleName(styleForCell(styleCells[k])) << "\n";
         }
     }
-    // 우주 방(1번): 바닥 없음, 행성 중력, 행성 착지, 행성에 줄 걸기, 무중력, 적 스폰 위치, 공중 포털
-    static bool spaceFail = false;
-    auto check = [&](bool ok, const char* what) { if (!ok) { spaceFail = true; std::cout << "[test] FAIL space: " << what << "\n"; } };
     if (phase == 2 && frame == t0 + 300) {
-        roomCleared[SPACE_CELL] = false;
-        travelTo(SPACE_CELL, glm::vec3(0.0f));
-        fadeT = 0.0f;
-        waveTimer = 1e9f;
-        spawnWave(); spawnWave();
-        int bad = 0;
-        for (const auto& e : enemies) if (insidePlanet(e.pos + glm::vec3(0, 1, 0), 1.0f)) ++bad;
-        std::cout << "[test] space: planets " << planets.size() << " boxes " << boxes.size() << " decor " << localDecor.size()
-                  << " enemies " << enemies.size() << " insidePlanet " << bad << "\n";
-        check(planets.size() == 6 && !enemies.empty() && bad == 0, "build/spawn");
-        player.pos = planets[0].c + glm::vec3(0, planets[0].r + 5.0f, 0) - glm::vec3(0, 0.9f, 0);   // 가운데 행성 5 위
-        player.vel = glm::vec3(0.0f);
-        aimAt(planets[0].c);
-    }
-    if (phase == 2 && frame == t0 + 320) {
-        std::cout << "[test] space: falling to planet, onGround " << player.onGround << " vel " << pv(player.vel * 10.0f) << "/10\n";
-        check(!player.onGround && glm::dot(player.vel, planets[0].c - player.pos) > 0.0f, "planet pull");
-    }
-    static float minAlt = 1e9f;
-    if (phase == 2 && frame > t0 + 300 && frame <= t0 + 520)
-        minAlt = std::min(minAlt, glm::length(player.pos + glm::vec3(0, 0.9f, 0) - planets[0].c) - planets[0].r);
-    if (phase == 2 && frame == t0 + 520) {
-        float alt = glm::length(player.pos + glm::vec3(0, 0.9f, 0) - planets[0].c) - planets[0].r;
-        std::cout << "[test] space: planet landing, min altitude " << minAlt << " now " << alt << " speed " << glm::length(player.vel) << "\n";
-        check(minAlt > 0.8f && minAlt < 1.0f, "landed on planet (body radius 0.9 above surface)");
-        aimAt(planets[2].c);
-        shot(20);
-        grappleWasDown = false;
-        testGrapple = true;
-    }
-    if (phase == 2 && frame == t0 + 523) {
-        float d = glm::length(grap.anchor - planets[2].c);
-        std::cout << "[test] space: grapple on gas giant " << grap.active << " anchor-center " << d << " r " << planets[2].r << "\n";
-        check(grap.active && fabsf(d - planets[2].r) < 0.5f, "grapple planet");
-        testGrapple = false;
-        releaseGrapple();
-        // 행성에서 먼 빈 공간: 중력 0, 떠 있어야 한다
-        player.pos = ROOM_C + glm::vec3(-8.0f, -24.0f, -20.0f);
-        player.vel = glm::vec3(0.0f);
-    }
-    if (phase == 2 && frame == t0 + 550) {
-        std::cout << "[test] space: zero-g y drift " << (player.pos.y - (ROOM_C.y - 24.0f)) << " gravity " << glm::length(gravityAt(player.pos)) << "\n";
-        check(fabsf(player.pos.y - (ROOM_C.y - 24.0f)) < 0.1f && !player.onGround, "zero-g float");
-        for (auto& e : enemies) killEnemy(e, glm::vec3(0, 0, 1));
-        enemies.clear();
-        wave = ROOM_WAVES;
-    }
-    if (phase == 2 && frame == t0 + 565) {
-        int open = 0;
-        glm::vec3 look(0.0f);
-        for (const auto& D : FACE_DIRS) if (portalTarget(D) >= 0) { ++open; look = ROOM_C + D * ROOM_HALF; }
-        player.pos = ROOM_C + glm::normalize(look - ROOM_C) * (ROOM_HALF - 14.0f) + glm::vec3(2.0f, 1.0f, 2.0f);
-        aimAt(look);
-        std::cout << "[test] space: cleared " << roomCleared[SPACE_CELL] << " portals " << open << " sparks " << sparks.size() << "\n";
-        check(roomCleared[SPACE_CELL] && open > 0, "portals open");
-    }
-    if (phase == 2 && frame == t0 + 575) {
-        bannerT = 0.0f;
-        shot(21);
-        aimAt(ROOM_C + glm::vec3(-27, 22, -8));     // 정거장
-    }
-    if (phase == 2 && frame == t0 + 580) shot(22);
-    if (phase == 2 && frame == t0 + 590) {
-        std::cout << "[test] space: " << (spaceFail ? "FAIL" : "ok") << "\n";
         restartRun();
         std::cout << "[test] restart -> cell " << currentCell << " cleared rooms " << std::count(std::begin(roomCleared), std::end(roomCleared), true) << "\n";
     }
-    if (phase == 2 && frame == t0 + 605) {
+    if (phase == 2 && frame == t0 + 315) {
         std::cout << "[test] done\n";
         glfwSetWindowShouldClose(gWindow, true);
     }

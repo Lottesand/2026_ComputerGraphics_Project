@@ -177,12 +177,6 @@ const int HUB_CELL = 13;
 const int ARENA_CELL = 26;
 
       // (1, 1, 1) 꼭짓점 칸. 데모 때 만든 경기장 샘플이 이 칸의 바닥에 놓인다
-const int SPACE_CELL = 1;
-
-        // 우주 정거장 방: 벽이 없고 무중력. 행성 가까이에서만 행성 쪽으로 중력이 생긴다
-const float SPACE_BOUND = ROOM_HALF * 1.5f;
-
-      // 우주 방에서 돌아다닐 수 있는 범위 (방 중심에서 각 축으로). 포털은 원래 방 크기 자리에 생긴다
 const int ROOM_WAVES = 2;
 
            // 칸(방) 번호 기준. 방이 회전해 자리를 옮겨도 클리어 기록은 방을 따라간다
@@ -203,10 +197,6 @@ struct Cubie {
     glm::ivec3 pos;     // -1 ~ 1
     glm::mat3 orient;   // 방 → 큐브 공간 회전. 90도 단위라 원소는 항상 0, 1, -1
 };
-
-
-// 행성 (우주 방). 중심은 방 좌표계, 방이 돌면 같이 돈다
-struct Planet { glm::vec3 c; float r; Material mat; };
 
 
 // 회전된 상자(대각선 선로 등). 축 정렬 상자가 아니라 충돌은 없고 그리기만 한다 (방 좌표계)
@@ -352,8 +342,7 @@ extern float fadeT;                     // 방을 넘어갈 때 화면을 덮는
 extern glm::vec3 fadeColor;
 extern float arrivalHoleT;              // 도착한 방 벽에 열린 구멍이 닫히는 정도 (1 → 0)
 extern glm::vec3 arrivalHolePos, arrivalHoleNormal, arrivalHoleColor;
-extern Mesh diskMesh, sphereMesh;
-extern std::vector<Planet> localPlanets, planets;
+extern Mesh diskMesh;
 extern std::mt19937 rng;
 extern Mesh cubeMesh, tetraMesh;
 extern GLuint albedoArray;
@@ -421,14 +410,6 @@ int styleForCell(int cell);
 const char* styleName(int style);
 glm::vec3 styleTint(int style);
 Mesh buildDisk(int segments);
-Mesh buildSphere(int slices, int stacks);
-bool spaceRoom();
-void buildSpace();
-glm::vec3 gravityAt(glm::vec3 p);
-bool collidePlanets(glm::vec3& center, glm::vec3& vel, float radius, glm::vec3* normalOut = nullptr);
-bool insidePlanet(glm::vec3 p, float margin);
-void emitPortalSparks(float dt);
-void drawPlanets();
 glm::vec3 trackWallNormal(const Track& t, bool exitSide);
 glm::vec3 trackWallPoint(const Track& t, bool exitSide);
 int trackDestination(const Track& t);

@@ -29,18 +29,8 @@ void spawnWave() {
         glm::vec3 spot(0.0f);
         bool found = false;
         for (int attempt = 0; attempt < 60 && !found; ++attempt) {
-            if (spaceRoom()) {
-                // 우주 방: 바닥이 없으니 공중 아무 데나 (행성과 정거장 몸체는 피해서) 떠서 나타난다
-                spot = ROOM_C + glm::vec3(frand(-1, 1), frand(-1, 1), frand(-1, 1)) * (ROOM_HALF - 4.0f);
-                bool inBox = false;
-                for (const auto& b : boxes)
-                    if (b.solid && glm::all(glm::greaterThan(spot + glm::vec3(0, 1, 0), b.bmin() - 1.5f)) &&
-                        glm::all(glm::lessThan(spot + glm::vec3(0, 1, 0), b.bmax() + 1.5f))) inBox = true;
-                found = glm::length(spot - player.pos) > 14.0f && !inBox && !insidePlanet(spot + glm::vec3(0, 1, 0), 2.5f);
-            } else {
-                spot = glm::vec3(frand(-ROOM_HALF + 3.0f, ROOM_HALF - 3.0f), 0, frand(-ROOM_HALF + 3.0f, ROOM_HALF - 3.0f));
-                found = glm::length(spot - player.pos) > 12.0f && spotIsFree(spot, 0.7f);
-            }
+            spot = glm::vec3(frand(-ROOM_HALF + 3.0f, ROOM_HALF - 3.0f), 0, frand(-ROOM_HALF + 3.0f, ROOM_HALF - 3.0f));
+            found = glm::length(spot - player.pos) > 12.0f && spotIsFree(spot, 0.7f);
         }
         if (!found) continue;
         Enemy e{};
@@ -181,8 +171,7 @@ void travelTo(int id, glm::vec3 D, bool viaTrain) {
     }
     player.onGround = false;
     portalArmed = false;
-    bannerText = (id == HUB_CELL ? std::string("HUB") : "ROOM " + std::to_string(id)) + " - " +
-                 (id == SPACE_CELL ? "SPACE STATION (ZERO-G)" : styleName(styleForCell(id)));
+    bannerText = (id == HUB_CELL ? std::string("HUB") : "ROOM " + std::to_string(id)) + " - " + styleName(styleForCell(id));
     bannerT = 2.5f;
 }
 
@@ -209,7 +198,6 @@ void updatePortals() {
         float along = glm::dot(p, D);
         glm::vec3 lat = glm::abs(p - D * along);
         if (along < ROOM_HALF - 1.6f || std::max({ lat.x, lat.y, lat.z }) > 4.2f) continue;
-        if (spaceRoom() && along > ROOM_HALF + 1.6f) continue;     // 우주 방은 벽이 없어 포털 고리 뒤로도 지나갈 수 있다
         inside = true;
         int target = portalTarget(D);
         if (portalArmed && roomCleared[currentCell] && target >= 0) { travelTo(target, D); return; }
@@ -359,86 +347,52 @@ void updatePlayer(float dt) {
     }
 
     glm::vec3 f(sinf(player.yaw), 0, -cosf(player.yaw)), r(cosf(player.yaw), 0, sinf(player.yaw));
-    glm::vec3 wish(0.0f), wish3(0.0f);     // wish3: 무중력에서 쓰는 시선 기준 3D 방향
-    bool kW = glfwGetKey(gWindow, GLFW_KEY_W) == GLFW_PRESS, kS = glfwGetKey(gWindow, GLFW_KEY_S) == GLFW_PRESS;
-    bool kD = glfwGetKey(gWindow, GLFW_KEY_D) == GLFW_PRESS, kA = glfwGetKey(gWindow, GLFW_KEY_A) == GLFW_PRESS;
-    if (kW) { wish += f; wish3 += forwardDir(); }
-    if (kS) { wish -= f; wish3 -= forwardDir(); }
-    if (kD) { wish += r; wish3 += r; }
-    if (kA) { wish -= r; wish3 -= r; }
+    glm::vec3 wish(0.0f);
+    if (glfwGetKey(gWindow, GLFW_KEY_W) == GLFW_PRESS) wish += f;
+    if (glfwGetKey(gWindow, GLFW_KEY_S) == GLFW_PRESS) wish -= f;
+    if (glfwGetKey(gWindow, GLFW_KEY_D) == GLFW_PRESS) wish += r;
+    if (glfwGetKey(gWindow, GLFW_KEY_A) == GLFW_PRESS) wish -= r;
     float speed = glfwGetKey(gWindow, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ? 8.5f : 5.5f;
     if (glm::length(wish) > 0.01f) wish = glm::normalize(wish) * speed;
-    if (glm::length(wish3) > 0.01f) wish3 = glm::normalize(wish3) * speed;
-
-    const bool space = spaceRoom();
-    static bool onPlanet = false;           // 지난 프레임에 행성 표면에 닿아 있었는지
-    static glm::vec3 planetN(0, 1, 0);
-    if (!space) onPlanet = false;
-    glm::vec3 g = gravityAt(player.pos + glm::vec3(0, 0.9f, 0));
-    float gl = glm::length(g);
-    glm::vec3 gdir = gl > 0.5f ? g / gl : glm::vec3(0.0f);   // 중력 방향 (무중력이면 0)
 
     // 우클릭을 누르는 순간 줄을 쏘고, 떼면 놓는다
     bool hold = glfwGetMouseButton(gWindow, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS || testGrapple;
     if (hold && !grappleWasDown) tryGrapple();
     if (!hold && grap.active) {
-        // 스윙 중에 놓으면 진행 방향 + 중력 반대쪽으로 살짝 튕겨 나간다 (다음 줄을 걸 시간을 번다)
+        // 스윙 중에 놓으면 진행 방향 + 위로 살짝 튕겨 나간다 (다음 줄을 걸 시간을 번다)
         if (!grap.onTrain && glm::length(player.vel) > 8.0f)
-            player.vel += glm::normalize(player.vel) * 3.0f - gdir * 5.0f;
+            player.vel += glm::normalize(player.vel) * 3.0f + glm::vec3(0, 5.0f, 0);
         releaseGrapple();
     }
     grappleWasDown = hold;
     // 줄에 매달린 상태에서 Space를 누르는 순간 대쉬
     static bool spaceWasDown = false;
-    bool spaceKey = glfwGetKey(gWindow, GLFW_KEY_SPACE) == GLFW_PRESS;
-    if (spaceKey && !spaceWasDown && grap.active) ropeDash();
-    spaceWasDown = spaceKey;
+    bool space = glfwGetKey(gWindow, GLFW_KEY_SPACE) == GLFW_PRESS;
+    if (space && !spaceWasDown && grap.active) ropeDash();
+    spaceWasDown = space;
     if (grap.active && grap.onTrain) {
         updateTrainRide(dt);
         return;
     }
 
-    if (space && onPlanet && !grap.active) {
-        // 행성 표면 걷기: 표면에 붙은 채 접선 방향으로만 움직이고, Space 로 표면에서 뛰어오른다
-        glm::vec3 vt = player.vel - planetN * glm::dot(player.vel, planetN);
-        glm::vec3 target = wish - planetN * glm::dot(wish, planetN);
-        player.vel += (target - vt) * std::min(1.0f, 10.0f * dt);
-        if (spaceKey) player.vel += planetN * 9.0f;
-        if (glm::length(target) > 0.5f) player.bobPhase += dt * glm::length(target) * 1.5f;
-    } else if (space && !player.onGround) {
-        // 무중력: 시선 방향으로 약하게 추진. 그 방향으로 이미 빠르면 더 밀지 않는다
-        if (!grap.active && glm::length(wish3) > 0.01f) {
-            glm::vec3 wd = glm::normalize(wish3);
-            float add = speed - glm::dot(player.vel, wd);
-            if (add > 0.0f) player.vel += wd * std::min(add, 9.0f * dt);
-        }
-    } else {
-        glm::vec2 hv(player.vel.x, player.vel.z), target(wish.x, wish.z);
-        if (player.onGround) {
-            hv += (target - hv) * std::min(1.0f, 14.0f * dt);
-        } else if (glm::length(target) > 0.01f) {
-            // 공중에서는 원하는 방향으로만 가속하고 속도를 깎지 않는다 → 스윙 관성이 유지된다
-            glm::vec2 wd = glm::normalize(target);
-            float add = speed - glm::dot(hv, wd);
-            if (add > 0.0f) hv += wd * std::min(add, 12.0f * dt);
-        }
-        player.vel.x = hv.x;
-        player.vel.z = hv.y;
-        if (player.onGround && glm::length(hv) > 0.5f) player.bobPhase += dt * glm::length(hv) * 1.5f;
+    glm::vec2 hv(player.vel.x, player.vel.z), target(wish.x, wish.z);
+    if (player.onGround) {
+        hv += (target - hv) * std::min(1.0f, 14.0f * dt);
+    } else if (glm::length(target) > 0.01f) {
+        // 공중에서는 원하는 방향으로만 가속하고 속도를 깎지 않는다 → 스윙 관성이 유지된다
+        glm::vec2 wd = glm::normalize(target);
+        float add = speed - glm::dot(hv, wd);
+        if (add > 0.0f) hv += wd * std::min(add, 12.0f * dt);
     }
+    player.vel.x = hv.x;
+    player.vel.z = hv.y;
+    if (player.onGround && glm::length(hv) > 0.5f) player.bobPhase += dt * glm::length(hv) * 1.5f;
 
-    if (player.onGround && spaceKey) {
+    if (player.onGround && glfwGetKey(gWindow, GLFW_KEY_SPACE) == GLFW_PRESS) {
         player.vel.y = 6.5f;
         player.onGround = false;
     }
-    player.vel += g * dt;
-    if (!space) player.vel.y = std::max(player.vel.y, -30.0f);
-    else {
-        // 무중력에서 손 놓고 떠 있으면 아주 천천히 멈춘다 (조작감용). 너무 빨라지지 않게 상한
-        if (gl < 0.5f && !grap.active && !onPlanet) player.vel *= 1.0f - 0.25f * dt;
-        float sp = glm::length(player.vel);
-        if (sp > 45.0f) player.vel *= 45.0f / sp;
-    }
+    player.vel.y = std::max(player.vel.y - 18.0f * dt, -30.0f);
 
     player.pos += player.vel * dt;
     if (grap.active) {
@@ -450,16 +404,14 @@ void updatePlayer(float dt) {
             player.pos -= n * (L - grap.len);
             float vr = glm::dot(player.vel, n);
             if (vr > 0.0f) player.vel -= n * vr;
-            // 줄이 팽팽할 때: 중력을 더 걸어 묵직하게 떨어지고, 아래쪽 호(중력 방향)에서 진행 방향으로 가속해 스윙이 죽지 않는다
-            player.vel += g * (10.0f / 18.0f) * dt;
+            // 줄이 팽팽할 때: 중력을 더 걸어 묵직하게 떨어지고, 아래쪽 호에서 진행 방향으로 가속해 스윙이 죽지 않는다
+            player.vel.y -= 10.0f * dt;
             glm::vec3 vt = player.vel - n * glm::dot(player.vel, n);
             float vtl = glm::length(vt);
-            float pump = 10.0f * std::max(0.0f, glm::dot(n, gdir)) * std::min(1.0f, gl / 18.0f);
-            if (vtl > 1.0f && vtl < 28.0f) player.vel += vt / vtl * (pump * dt);
-            // WASD 조종: 줄 방향 성분을 뺀 흔들림 방향으로만 힘을 준다 (줄을 당기거나 늘이지 않고 궤도만 바꿈). 무중력에서는 시선 기준 3D
-            glm::vec3 steer = space ? wish3 : wish;
-            if (glm::length(steer) > 0.01f) {
-                glm::vec3 wd = glm::normalize(steer);
+            if (vtl > 1.0f && vtl < 28.0f) player.vel += vt / vtl * (10.0f * std::max(0.0f, -n.y) * dt);
+            // WASD 조종: 줄 방향 성분을 뺀 흔들림 방향으로만 힘을 준다 (줄을 당기거나 늘이지 않고 궤도만 바꿈)
+            if (glm::length(wish) > 0.01f) {
+                glm::vec3 wd = glm::normalize(wish);
                 glm::vec3 wt = wd - n * glm::dot(wd, n);
                 // 최고 속도를 넘으면 더 빨라지는 쪽으로는 안 밀고, 방향 트는 힘만 남긴다
                 if (glm::length(player.vel) < 28.0f || glm::dot(player.vel, wt) < 0.0f) player.vel += wt * (8.0f * dt);
@@ -479,27 +431,11 @@ void updatePlayer(float dt) {
         if (b.bmax().y > player.pos.y + STEP_H && b.bmin().y < player.pos.y + PLAYER_H)
             pushOutCircle(player.pos, PLAYER_R, b);
     }
-    if (space) {
-        // 넓어진 범위 밖으로는 못 나간다 (보이지 않는 벽)
-        glm::vec3 rel = player.pos + glm::vec3(0, 0.9f, 0) - ROOM_C;
-        for (int i = 0; i < 3; ++i)
-            if (fabsf(rel[i]) > SPACE_BOUND) {
-                float sgn = rel[i] > 0.0f ? 1.0f : -1.0f;
-                rel[i] = sgn * SPACE_BOUND;
-                if (player.vel[i] * sgn > 0.0f) player.vel[i] = 0.0f;
-            }
-        // 행성에 닿으면 표면 위로 밀어내고 그 행성 위에 선 것으로 본다
-        glm::vec3 c = ROOM_C + rel, n;
-        onPlanet = collidePlanets(c, player.vel, 0.9f, &n);
-        if (onPlanet) planetN = n;
-        player.pos = c - glm::vec3(0, 0.9f, 0);
-    } else {
-        player.pos.x = glm::clamp(player.pos.x, -ROOM_HALF + PLAYER_R, ROOM_HALF - PLAYER_R);
-        player.pos.z = glm::clamp(player.pos.z, -ROOM_HALF + PLAYER_R, ROOM_HALF - PLAYER_R);
-        if (player.pos.y > ROOM_HALF * 2.0f - PLAYER_H - 0.05f) {
-            player.pos.y = ROOM_HALF * 2.0f - PLAYER_H - 0.05f;
-            player.vel.y = std::min(player.vel.y, 0.0f);
-        }
+    player.pos.x = glm::clamp(player.pos.x, -ROOM_HALF + PLAYER_R, ROOM_HALF - PLAYER_R);
+    player.pos.z = glm::clamp(player.pos.z, -ROOM_HALF + PLAYER_R, ROOM_HALF - PLAYER_R);
+    if (player.pos.y > ROOM_HALF * 2.0f - PLAYER_H - 0.05f) {
+        player.pos.y = ROOM_HALF * 2.0f - PLAYER_H - 0.05f;
+        player.vel.y = std::min(player.vel.y, 0.0f);
     }
 
     float ground = groundHeightAt(player.pos, PLAYER_R * 0.7f);
@@ -523,21 +459,17 @@ void updateEnemies(float dt) {
         if (!e.alive) continue;
         if (e.spawnT < 1.0f) { e.spawnT += dt * 0.8f; continue; }
 
-        const bool space = spaceRoom();
-        if (!space) {
-            // 방이 회전하면 적도 새 바닥으로 떨어진다
-            e.vy = std::max(e.vy - 18.0f * dt, -30.0f);
-            e.pos.y += e.vy * dt;
-            float eg = groundHeightAt(e.pos, ENEMY_R * 0.7f);
-            if (e.pos.y <= eg) { e.pos.y = eg; e.vy = 0.0f; }
-        }
+        // 방이 회전하면 적도 새 바닥으로 떨어진다
+        e.vy = std::max(e.vy - 18.0f * dt, -30.0f);
+        e.pos.y += e.vy * dt;
+        float eg = groundHeightAt(e.pos, ENEMY_R * 0.7f);
+        if (e.pos.y <= eg) { e.pos.y = eg; e.vy = 0.0f; }
 
-        // 우주 방에서는 떠다니며 위아래로도 따라온다 (중력 없음)
         glm::vec3 toP = player.pos - e.pos;
-        if (!space) toP.y = 0;
+        toP.y = 0;
         float dist = glm::length(toP);
         glm::vec3 dir = dist > 0.01f ? toP / dist : glm::vec3(0, 0, 1);
-        if (glm::length(glm::vec2(dir.x, dir.z)) > 0.01f) e.yaw = atan2f(dir.x, dir.z);
+        e.yaw = atan2f(dir.x, dir.z);
 
         glm::vec3 move(0.0f);
         if (dist > 11.0f) move = dir;
@@ -545,13 +477,8 @@ void updateEnemies(float dt) {
         else move = glm::vec3(-dir.z, 0, dir.x) * e.strafe * 0.7f;
         if (frand(0, 1) < dt * 0.4f) e.strafe = -e.strafe;
         if (glm::length(move) > 0.01f && !player.dead) {
-            e.pos += glm::normalize(move) * (space ? 3.0f : 2.3f) * dt;
+            e.pos += glm::normalize(move) * 2.3f * dt;
             e.walkT += dt;
-        }
-        if (space) {
-            glm::vec3 c = e.pos + glm::vec3(0, 1.0f, 0), v(0.0f);
-            collidePlanets(c, v, 1.0f);
-            e.pos = c - glm::vec3(0, 1.0f, 0);
         }
         for (const auto& b : boxes)
             if (b.solid && b.bmax().y > e.pos.y + STEP_H && b.bmin().y < e.pos.y + ENEMY_H) pushOutCircle(e.pos, ENEMY_R, b);
@@ -624,14 +551,13 @@ void updateBullets(float dt) {
 }
 
 void updateDebris(float dt) {
-    const bool space = spaceRoom();     // 우주 방: 파편과 불꽃이 떨어지지 않고 그대로 흩어진다
     for (auto& s : shards) {
         s.life -= dt;
-        if (!space) s.vel.y -= 9.8f * dt;
+        s.vel.y -= 9.8f * dt;
         s.pos += s.vel * dt;
         s.angle += s.angVel * dt;
         float floorY = s.size * 0.35f;
-        if (!space && s.pos.y < floorY) {
+        if (s.pos.y < floorY) {
             s.pos.y = floorY;
             s.vel.y *= -0.3f;
             s.vel.x *= 0.7f;
@@ -642,7 +568,7 @@ void updateDebris(float dt) {
     shards.erase(std::remove_if(shards.begin(), shards.end(), [](const Shard& s) { return s.life <= 0.0f; }), shards.end());
     for (auto& s : sparks) {
         s.life -= dt;
-        if (!space) s.vel.y -= 9.8f * dt;
+        s.vel.y -= 9.8f * dt;
         s.pos += s.vel * dt;
     }
     sparks.erase(std::remove_if(sparks.begin(), sparks.end(), [](const Spark& s) { return s.life <= 0.0f; }), sparks.end());
@@ -679,7 +605,6 @@ void update(float realDt) {
     updateEnemies(worldDt);
     updateBullets(worldDt);
     updateDebris(worldDt);
-    emitPortalSparks(worldDt);
 
     // 정해진 웨이브를 다 막으면 방 클리어 → 이 방의 포털이 열린다
     if (!roomCleared[currentCell] && enemies.empty() && !player.dead) {

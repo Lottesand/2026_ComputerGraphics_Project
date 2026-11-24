@@ -228,36 +228,6 @@ void drawTrains() {
 void drawPortals(bool films) {
     if (!portalsOn()) return;
     bool open = roomCleared[currentCell];
-    if (spaceRoom()) {
-        // 우주 방: 벽 대신 공중에 뜬 원형 마법 포털. 불꽃 고리가 돌고(불꽃 입자는 emitPortalSparks), 열리면 안에 빛나는 막
-        for (const auto& D : FACE_DIRS) {
-            int target = portalTarget(D);
-            if (target < 0) continue;
-            glm::mat4 O = glm::translate(glm::mat4(1.0f), ROOM_C + D * ROOM_HALF) * orientTo(D);
-            if (!films) {
-                for (int layer = 0; layer < 2; ++layer) {
-                    float spin = (open ? 2.2f : 0.3f) * globalTime * (layer == 0 ? 1.0f : -1.4f);
-                    float rr = 4.2f + layer * 0.25f;
-                    Material fm{ open ? glm::vec3(1.0f, 0.5f - layer * 0.15f, 0.1f) : glm::vec3(0.7f, 0.12f, 0.08f), 0.0f, 1.0f,
-                                 open ? 4.5f - layer * 1.5f : 0.9f, 0 };
-                    const int segs = 40;
-                    for (int i = 0; i < segs; ++i) {
-                        float a = 2.0f * PI * i / segs + spin;
-                        float wob = open ? 0.08f * sinf(globalTime * 9.0f + i * 1.7f) : 0.0f;
-                        glm::mat4 M = O * glm::rotate(glm::mat4(1.0f), a, glm::vec3(0, 0, 1)) *
-                                      glm::translate(glm::mat4(1.0f), glm::vec3(rr + wob, 0, 0)) *
-                                      glm::scale(glm::mat4(1.0f), glm::vec3(0.16f, 2.0f * PI * rr / segs * 0.8f, 0.16f));
-                        drawPart(M, fm);
-                    }
-                }
-            } else if (open) {
-                glm::vec3 tint = glm::mix(glm::vec3(1.0f, 0.55f, 0.2f), styleTint(styleForCell(target)), 0.5f);
-                Material film{ tint, 0.0f, 1.0f, 1.0f + 0.4f * sinf(globalTime * 3.0f), 0 };
-                drawMesh(diskMesh, O * glm::scale(glm::mat4(1.0f), glm::vec3(4.1f, 4.1f, 1.0f)), film);
-            }
-        }
-        return;
-    }
     for (const auto& D : FACE_DIRS) {
         if (portalTarget(D) < 0) continue;
         int n = fabsf(D.x) > 0.5f ? 0 : (fabsf(D.y) > 0.5f ? 1 : 2);
@@ -295,7 +265,6 @@ void drawWorld(bool withEffects) {
     }
     glm::mat4 W = roomToWorld();
     for (const auto& d : localDecor) drawPart(W * d.model, d.mat);
-    drawPlanets();
     drawTrains();
     drawHoles();
     if (!shadowPass) drawPortals(false);
@@ -334,16 +303,6 @@ void drawWorld(bool withEffects) {
         drawMesh(cubeMesh, TRS(s.pos, glm::vec3(0.05f * std::min(1.0f, s.life * 3.0f))), m);
     }
 }
-// 행성: 구 메쉬. 무늬(줄무늬, 대륙, 크레이터)는 셰이더가 물체 좌표로 만든다. 방 회전을 따라 자전축도 돈다.
-// 큰 곡면이 그림자 맵에 자기 그림자를 계단처럼 찍으므로 그림자는 드리우지 않는다 (밤쪽은 햇빛 각도로 어두워짐)
-void drawPlanets() {
-    if (shadowPass) return;
-    for (const auto& p : planets) {
-        glm::mat4 M = glm::translate(glm::mat4(1.0f), p.c) * glm::mat4(worldOrient) * glm::scale(glm::mat4(1.0f), glm::vec3(p.r));
-        drawMesh(sphereMesh, M, p.mat);
-    }
-}
-
 int statLights = 0;
 void uploadLights(glm::vec3 eye) {
     std::vector<LightSrc> cand;
@@ -494,7 +453,6 @@ void renderFrame(int w, int h) {
     glUniform3fv(U(skyProg, "zenith"), 1, glm::value_ptr(SKY_ZENITH));
     glUniform3fv(U(skyProg, "horizon"), 1, glm::value_ptr(SKY_HORIZON));
     glUniform3fv(U(skyProg, "sunColor"), 1, glm::value_ptr(SUN_COLOR));
-    glUniform1i(U(skyProg, "space"), spaceRoom() ? 1 : 0);
     drawFullscreen();
     glEnable(GL_DEPTH_TEST);
 
@@ -504,21 +462,18 @@ void renderFrame(int w, int h) {
     glUniformMatrix4fv(sl.proj, 1, GL_FALSE, glm::value_ptr(proj));
     glUniformMatrix4fv(sl.lightVP, 1, GL_FALSE, glm::value_ptr(lightVP));
     // 허브(유리 지붕 기차역)는 차갑고 어두운 회청색 조명
-    // 우주 방은 대기가 없어 햇빛이 희고 강하며, 주변광은 아주 어둡고 안개도 거의 없다
-    bool hub = currentCell == HUB_CELL, space = spaceRoom();
-    glm::vec3 sunC = hub ? glm::vec3(0.75f, 0.8f, 0.9f) : (space ? glm::vec3(1.9f, 1.8f, 1.65f) : SUN_COLOR);
-    glm::vec3 fogC = hub ? glm::vec3(0.2f, 0.24f, 0.3f) : (space ? glm::vec3(0.01f, 0.012f, 0.03f) : SKY_HORIZON);
+    bool hub = currentCell == HUB_CELL;
+    glm::vec3 sunC = hub ? glm::vec3(0.75f, 0.8f, 0.9f) : SUN_COLOR;
+    glm::vec3 fogC = hub ? glm::vec3(0.2f, 0.24f, 0.3f) : SKY_HORIZON;
     glUniform3fv(sl.sunDir, 1, glm::value_ptr(sunW));
     glUniform3fv(sl.sunColor, 1, glm::value_ptr(sunC));
     if (hub) glUniform3f(sl.skyAmb, 0.2f, 0.25f, 0.33f);
-    else if (space) glUniform3f(sl.skyAmb, 0.1f, 0.11f, 0.17f);
     else glUniform3f(sl.skyAmb, 0.32f, 0.4f, 0.58f);
     if (hub) glUniform3f(sl.groundAmb, 0.1f, 0.11f, 0.13f);
-    else if (space) glUniform3f(sl.groundAmb, 0.05f, 0.04f, 0.07f);
     else glUniform3f(sl.groundAmb, 0.32f, 0.24f, 0.2f);
     glUniform3fv(sl.viewPos, 1, glm::value_ptr(eye));
     glUniform3fv(sl.fogColor, 1, glm::value_ptr(fogC));
-    glUniform1f(sl.fogDensity, hub ? 0.009f : (space ? 0.002f : 0.012f));
+    glUniform1f(sl.fogDensity, hub ? 0.009f : 0.012f);
     glUniform1f(sl.farPlane, FAR_PLANE);
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, shadowTex);
@@ -594,7 +549,7 @@ void renderFrame(int w, int h) {
 // 방마다 다른 렌더 스타일: 허브는 실사, 데모 경기장은 원래 화면, 나머지 방은 칸 번호로 돌아가며
 // ===================================================================
 int styleForCell(int cell) {
-    if (cell == HUB_CELL || cell == SPACE_CELL) return STYLE_REAL;
+    if (cell == HUB_CELL) return STYLE_REAL;
     if (cell == ARENA_CELL) return STYLE_MINIMAL;
     static const int cycle[5] = { STYLE_TOON, STYLE_PIXEL, STYLE_NOIR, STYLE_NEON, STYLE_BLUEPRINT };
     return cycle[cell % 5];

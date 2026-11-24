@@ -15,7 +15,7 @@ flat in vec3 fObjScale;
 #define Ks fKs
 #define shininess fShin
 #define emissive fEmis
-#define pattern fPattern            // 0 단색, 1 바닥 타일, 2 콘크리트 노이즈, 3 유리 격자 벽, 4 가스 행성, 5 지구형 행성, 6 바위 행성
+#define pattern fPattern            // 0 단색, 1 바닥 타일, 2 콘크리트 노이즈, 3 유리 격자 벽
 #define texLayer fTexLayer          // -1 이면 텍스처 없음
 #define texScale fTexScale          // 텍스처 한 장이 덮는 길이 (음수면 면 하나에 한 장)
 #define objScale fObjScale
@@ -87,27 +87,6 @@ vec3 surface(vec3 base, vec3 N)
         float pane = 0.82 + 0.28 * hash(floor(g)) + 0.1 * noise(q * 0.3);
         vec3 glass = base * pane;
         return mix(glass, vec3(0.16, 0.17, 0.2), max(mullion, big));
-    }
-    // 행성 무늬 (물체 좌표 = 단위 구 위의 점이라 행성과 함께 돈다)
-    vec3 q = normalize(oPos);
-    if (pattern == 4) {
-        // 가스 행성: 위도 방향 줄무늬가 노이즈로 일렁인다
-        float w = q.y * 9.0 + (noise(q.xz * 3.0 + 2.0) - 0.5) * 1.6;
-        float b = sin(w * 2.0) * 0.5 + 0.5, b2 = sin(w * 5.3 + 1.0) * 0.5 + 0.5;
-        return base * (0.62 + 0.32 * b + 0.12 * b2) * mix(vec3(1.0), vec3(1.1, 0.85, 0.7), b2 * 0.5);
-    }
-    if (pattern == 5) {
-        // 지구형: 바다(재질 색) + 대륙 + 극지방 얼음
-        float n = noise(q.xy * 2.1 + q.z * 1.3) * 0.55 + noise(q.yz * 4.7 + 3.0) * 0.3 + noise(q.zx * 11.0) * 0.15;
-        vec3 land = mix(vec3(0.2, 0.42, 0.16), vec3(0.58, 0.48, 0.3), noise(q.xy * 6.0 + 9.0));
-        vec3 c = mix(base, land, smoothstep(0.5, 0.53, n));
-        return mix(c, vec3(0.95), smoothstep(0.88, 0.92, abs(q.y) + (n - 0.5) * 0.15));
-    }
-    if (pattern == 6) {
-        // 바위 행성: 여러 크기 노이즈 + 어두운 크레이터 점
-        float n = noise(q.xy * 4.0 + q.z * 2.0) * 0.5 + noise(q.yz * 9.0) * 0.3 + noise(q.zx * 21.0) * 0.2;
-        float crater = smoothstep(0.78, 0.86, noise(q.xz * 7.0 + q.y * 3.0));
-        return base * (0.6 + 0.6 * n) * (1.0 - crater * 0.35);
     }
     return base;
 }
