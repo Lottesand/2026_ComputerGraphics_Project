@@ -409,6 +409,14 @@ void updatePlayer(float dt) {
             glm::vec3 vt = player.vel - n * glm::dot(player.vel, n);
             float vtl = glm::length(vt);
             if (vtl > 1.0f && vtl < 28.0f) player.vel += vt / vtl * (10.0f * std::max(0.0f, -n.y) * dt);
+            // WASD 조종: 줄 방향 성분을 뺀 흔들림 방향으로만 힘을 준다 (줄을 당기거나 늘이지 않고 궤도만 바꿈)
+            if (glm::length(wish) > 0.01f) {
+                glm::vec3 wd = glm::normalize(wish);
+                glm::vec3 wt = wd - n * glm::dot(wd, n);
+                // 최고 속도를 넘으면 더 빨라지는 쪽으로는 안 밀고, 방향 트는 힘만 남긴다
+                if (glm::length(player.vel) < 28.0f || glm::dot(player.vel, wt) < 0.0f) player.vel += wt * (8.0f * dt);
+                else player.vel += (wt - glm::normalize(player.vel) * glm::dot(wt, glm::normalize(player.vel))) * (8.0f * dt);
+            }
         }
         // 호 아래쪽에서 바닥에 닿기 직전일 때만 줄을 조금씩 짧게 해 발이 바닥 위로 지나가게 한다.
         // 한 번에 줄이면 먼 타점에 걸었을 때 앞으로 순간이동하므로 초당 12 까지만
