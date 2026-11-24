@@ -11,6 +11,12 @@ bool firstMouse = true;
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
     if (action != GLFW_PRESS) return;
     if (key == GLFW_KEY_Q) { glfwSetWindowShouldClose(window, true); return; }
+    if (augPicking) {
+        // 증강 고르는 중: 1/2/3 으로 고르기 (마우스 클릭도 됨). 다른 키는 막는다
+        if (key >= GLFW_KEY_1 && key <= GLFW_KEY_3) chooseAugment(key - GLFW_KEY_1);
+        else if (key == GLFW_KEY_ESCAPE) glfwSetWindowShouldClose(window, true);
+        return;
+    }
     if (cubeView) {
         bool idle = dragMode == DRAG_NONE;
         if ((key == GLFW_KEY_TAB || key == GLFW_KEY_ESCAPE) && idle) { closeCubeView(); firstMouse = true; }
@@ -24,6 +30,18 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 }
 
 void mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
+    if (augPicking) {
+        if (button != GLFW_MOUSE_BUTTON_LEFT || action != GLFW_PRESS) return;
+        double mx, my;
+        int ww, wh, fw, fh;
+        glfwGetCursorPos(window, &mx, &my);
+        glfwGetWindowSize(window, &ww, &wh);
+        glfwGetFramebufferSize(window, &fw, &fh);
+        if (ww <= 0 || wh <= 0) return;
+        // 창 좌표(y 아래) → HUD 픽셀 좌표(y 위)
+        chooseAugment(augmentCardAt(mx * fw / ww, fh - my * fh / wh, fw, fh));
+        return;
+    }
     if (!cubeView || button != GLFW_MOUSE_BUTTON_LEFT) return;
     double mx, my;
     glfwGetCursorPos(window, &mx, &my);
@@ -36,6 +54,7 @@ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
 }
 
 void cursor_callback(GLFWwindow* window, double x, double y) {
+    if (augPicking) return;
     if (cubeView) {
         cubeMouseMove(x, y);
         return;
@@ -154,6 +173,7 @@ int main(int argc, char** argv) {
     std::cout << "[info] textures " << TEX_COUNT << " x " << TEX_SIZE << "^2 generated in " << (int)((glfwGetTime() - texT0) * 1000) << " ms\n"
               << "[info] GPU " << (const char*)glGetString(GL_RENDERER) << " / GL " << (const char*)glGetString(GL_VERSION) << "\n";
     cubeViewQ = glm::angleAxis(0.5f, glm::vec3(1, 0, 0)) * glm::angleAxis(-0.6f, glm::vec3(0, 1, 0));
+    initAugments();
     restartRun();
 
     std::cout << "=== Cube ===\n"

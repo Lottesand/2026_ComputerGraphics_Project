@@ -48,7 +48,7 @@ void resetGame() {
     player.pos = glm::vec3(0, 0, 4);
     for (int attempt = 0; attempt < 60 && !spotIsFree(player.pos, 0.6f); ++attempt)
         player.pos = glm::vec3(frand(-18, 18), 0, frand(-18, 18));
-    player.hp = 3;
+    player.hp = stats.maxHp;
     player.onGround = true;
     wave = 0; kills = 0;
     waveTimer = 1.0f;
@@ -65,7 +65,7 @@ glm::mat4 carWorld(int k, int i) {
 // 시선 광선이 처음 닿는 곳: 달리는 객차(회전된 상자) 또는 고정 구조물
 bool castGrapple(glm::vec3 o, glm::vec3 d, Grapple& out) {
     float best = 2.0f, tw;
-    glm::vec3 p1 = o + d * GRAPPLE_RANGE;
+    glm::vec3 p1 = o + d * stats.grappleRange;
     if (segmentBlocked(o, p1, &tw) && tw <= 1.0f) {
         best = tw;
         out = Grapple{};
@@ -99,7 +99,7 @@ void releaseGrapple() { grap = Grapple{}; }
 void ropeDash() {
     glm::vec3 fwd = forwardDir();
     releaseGrapple();
-    player.vel = fwd * std::max(20.0f, glm::dot(player.vel, fwd));
+    player.vel = fwd * std::max(stats.dash, glm::dot(player.vel, fwd));
     player.onGround = false;
 }
 
@@ -176,6 +176,7 @@ void travelTo(int id, glm::vec3 D, bool viaTrain) {
 }
 
 void restartRun() {
+    resetAugments();
     initCube();
     for (bool& c : roomCleared) c = false;
     roomCleared[HUB_CELL] = true;
@@ -278,6 +279,7 @@ glm::vec3 enemyMuzzle(const Enemy& e) {
 void killEnemy(Enemy& e, glm::vec3 hitDir) {
     e.alive = false;
     ++kills;
+    if (stats.killsPerHeal > 0 && kills % stats.killsPerHeal == 0) player.hp = std::min(stats.maxHp, player.hp + 1);
     EnemyRig r = enemyRig(e);
     for (int i = 0; i < 46; ++i) {
         glm::vec3 local(frand(-0.28f, 0.28f), frand(0.1f, 1.95f), frand(-0.17f, 0.17f));
@@ -316,8 +318,16 @@ void firePlayer() {
     glm::vec3 far = eye + fwd * 80.0f;
     segmentBlocked(eye, far, &tWall);
     glm::vec3 aim = eye + fwd * (80.0f * std::min(tWall, 1.0f));
-    bullets.push_back({ muzzle, glm::normalize(aim - muzzle) * 75.0f, true, true, 3.0f });
-    player.fireCd = 0.22f;
+    // 다중 사격: 가운데를 중심으로 좌우로 조금씩 벌려 쏜다
+    glm::vec3 dir0 = glm::normalize(aim - muzzle);
+    for (int i = 0; i < stats.pellets; ++i) {
+        float a = (i - (stats.pellets - 1) * 0.5f) * 0.045f;
+        glm::vec3 d = glm::normalize(dir0 * cosf(a) + right * sinf(a));
+        Bullet b{ muzzle, d * stats.bulletSpeed, true, true, 3.0f };
+        b.pierce = stats.pierce;
+        bullets.push_back(b);
+    }
+    player.fireCd = stats.fireInterval;
     player.recoil = 1.0f;
     player.muzzleT = 0.05f;
 }
@@ -352,7 +362,7 @@ void updatePlayer(float dt) {
     if (glfwGetKey(gWindow, GLFW_KEY_S) == GLFW_PRESS) wish -= f;
     if (glfwGetKey(gWindow, GLFW_KEY_D) == GLFW_PRESS) wish += r;
     if (glfwGetKey(gWindow, GLFW_KEY_A) == GLFW_PRESS) wish -= r;
-    float speed = glfwGetKey(gWindow, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ? 8.5f : 5.5f;
+    float speed = (glfwGetKey(gWindow, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ? 8.5f * stats.sprintMul : 5.5f) * stats.moveMul;
     if (glm::length(wish) > 0.01f) wish = glm::normalize(wish) * speed;
 
     // 우클릭을 누르는 순간 줄을 쏘고, 떼면 놓는다
@@ -361,7 +371,7 @@ void updatePlayer(float dt) {
     if (!hold && grap.active) {
         // 스윙 중에 놓으면 진행 방향 + 위로 살짝 튕겨 나간다 (다음 줄을 걸 시간을 번다)
         if (!grap.onTrain && glm::length(player.vel) > 8.0f)
-            player.vel += glm::normalize(player.vel) * 3.0f + glm::vec3(0, 5.0f, 0);
+            player.vel += (glm::normalize(player.vel) * 3.0f + glm::vec3(0, 5.0f, 0)) * stats.releasePop;
         releaseGrapple();
     }
     grappleWasDown = hold;
@@ -389,7 +399,7 @@ void updatePlayer(float dt) {
     if (player.onGround && glm::length(hv) > 0.5f) player.bobPhase += dt * glm::length(hv) * 1.5f;
 
     if (player.onGround && glfwGetKey(gWindow, GLFW_KEY_SPACE) == GLFW_PRESS) {
-        player.vel.y = 6.5f;
+        player.vel.y = stats.jump;
         player.onGround = false;
     }
     player.vel.y = std::max(player.vel.y - 18.0f * dt, -30.0f);
@@ -408,14 +418,14 @@ void updatePlayer(float dt) {
             player.vel.y -= 10.0f * dt;
             glm::vec3 vt = player.vel - n * glm::dot(player.vel, n);
             float vtl = glm::length(vt);
-            if (vtl > 1.0f && vtl < 28.0f) player.vel += vt / vtl * (10.0f * std::max(0.0f, -n.y) * dt);
+            if (vtl > 1.0f && vtl < stats.swingMax) player.vel += vt / vtl * (stats.pump * std::max(0.0f, -n.y) * dt);
             // WASD 조종: 줄 방향 성분을 뺀 흔들림 방향으로만 힘을 준다 (줄을 당기거나 늘이지 않고 궤도만 바꿈)
             if (glm::length(wish) > 0.01f) {
                 glm::vec3 wd = glm::normalize(wish);
                 glm::vec3 wt = wd - n * glm::dot(wd, n);
                 // 최고 속도를 넘으면 더 빨라지는 쪽으로는 안 밀고, 방향 트는 힘만 남긴다
-                if (glm::length(player.vel) < 28.0f || glm::dot(player.vel, wt) < 0.0f) player.vel += wt * (8.0f * dt);
-                else player.vel += (wt - glm::normalize(player.vel) * glm::dot(wt, glm::normalize(player.vel))) * (8.0f * dt);
+                if (glm::length(player.vel) < stats.swingMax || glm::dot(player.vel, wt) < 0.0f) player.vel += wt * (stats.steer * dt);
+                else player.vel += (wt - glm::normalize(player.vel) * glm::dot(wt, glm::normalize(player.vel))) * (stats.steer * dt);
             }
         }
         // 호 아래쪽에서 바닥에 닿기 직전일 때만 줄을 조금씩 짧게 해 발이 바닥 위로 지나가게 한다.
@@ -529,7 +539,8 @@ void updateBullets(float dt) {
                 glm::vec3 end = p0 + (p1 - p0) * tHitT;
                 if (segHitsCylinder(p0, end, e.pos, ENEMY_R, ENEMY_H)) {
                     killEnemy(e, dir);
-                    b.alive = false;
+                    if (b.pierce > 0) --b.pierce;   // 관통: 이 적을 지나 계속 날아간다
+                    else b.alive = false;
                     break;
                 }
             }
@@ -579,6 +590,7 @@ void update(float realDt) {
     fadeT = std::max(0.0f, fadeT - realDt * 1.4f);
     arrivalHoleT = std::max(0.0f, arrivalHoleT - realDt * 0.7f);
     if (cubeView) { updateCubeView(realDt); return; }
+    if (augPicking) return;     // 증강 고르는 동안 멈춤
     if (rotAnimActive) {
         rotAnimT += realDt / 1.1f;
         if (rotAnimT >= 1.0f) rotAnimActive = false;
@@ -591,8 +603,8 @@ void update(float realDt) {
     // 집중 모드: 세계 시간은 크게 느려지고, 플레이어는 덜 느려짐
     focusActive = !player.dead && focusEnergy > 0.02f &&
                   glfwGetKey(gWindow, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS;
-    if (focusActive) focusEnergy = std::max(0.0f, focusEnergy - realDt * 0.22f);
-    else focusEnergy = std::min(1.0f, focusEnergy + realDt * 0.12f);
+    if (focusActive) focusEnergy = std::max(0.0f, focusEnergy - realDt * stats.focusDrain);
+    else focusEnergy = std::min(1.0f, focusEnergy + realDt * stats.focusRegen);
     float targetScale = player.dead ? 0.08f : (focusActive ? 0.1f : 1.0f);
     timeScale += (targetScale - timeScale) * std::min(1.0f, realDt * 8.0f);
 
@@ -612,6 +624,8 @@ void update(float realDt) {
             roomCleared[currentCell] = true;
             bannerText = "ROOM CLEAR - PORTALS OPEN";
             bannerT = 3.0f;
+            player.hp = std::min(stats.maxHp, player.hp + stats.clearHeal);
+            startAugmentPick();
         } else {
             waveTimer -= realDt;
             if (waveTimer <= 0.0f) {

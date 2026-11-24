@@ -105,6 +105,7 @@ struct Bullet {
     glm::vec3 pos, vel;
     bool fromPlayer, alive;
     float life;
+    int pierce = 0;     // 플레이어 총알이 적을 더 뚫고 지나갈 수 있는 수
 };
 
 
@@ -226,7 +227,6 @@ struct Grapple {
     float lastS = 0.0f;         // 지난 프레임 객차 위치. 한 바퀴 돌아 처음으로 가면 놓친다
 };
 
-const float GRAPPLE_RANGE = 70.0f;
 
 
 // 적 몸체 각 부위의 월드 행렬 (그리기/총구/파편 생성 공용)
@@ -304,6 +304,7 @@ const Glyph FONT[] = {
     {'-',{0x00,0x00,0x00,0x1F,0x00,0x00,0x00}}, {'.',{0x00,0x00,0x00,0x00,0x00,0x0C,0x0C}},
     {'(',{0x02,0x04,0x08,0x08,0x08,0x04,0x02}}, {')',{0x08,0x04,0x02,0x02,0x02,0x04,0x08}},
     {'[',{0x0E,0x08,0x08,0x08,0x08,0x08,0x0E}}, {']',{0x0E,0x02,0x02,0x02,0x02,0x02,0x0E}},
+    {'+',{0x00,0x04,0x04,0x1F,0x04,0x04,0x00}}, {'%',{0x18,0x19,0x02,0x04,0x08,0x13,0x03}},
 };
 
 
@@ -335,7 +336,24 @@ const int BENCH_WARM = 120, BENCH_MEAS = 240;
 // 방마다 다른 렌더 스타일. 허브는 실사, 다른 방은 각자 다른 그래픽
 enum RenderStyle { STYLE_REAL = 0, STYLE_MINIMAL, STYLE_TOON, STYLE_PIXEL, STYLE_NOIR, STYLE_NEON, STYLE_BLUEPRINT, STYLE_COUNT };
 
-const float RIDE_ROPE = 5.5f;   // 기차에 매달려 갈 때 줄 길이
+const float RIDE_ROPE = 5.5f;
+
+// ===================================================================
+// 증강: 방을 깰 때마다 3개 중 하나 → 이번 판 동안 영구 강화. 값은 증강 전 기본 스탯
+// ===================================================================
+struct Stats {
+    float fireInterval = 0.22f, bulletSpeed = 75.0f;
+    float moveMul = 1.0f, sprintMul = 1.0f, jump = 6.5f;
+    float focusDrain = 0.22f, focusRegen = 0.12f;
+    float grappleRange = 70.0f, dash = 20.0f, pump = 10.0f, swingMax = 28.0f, steer = 8.0f, releasePop = 1.0f;
+    int maxHp = 3, pierce = 0, pellets = 1, clearHeal = 0, killsPerHeal = 0;
+};
+
+struct Augment {
+    std::string name, desc;
+    int line, tier;     // 계열 번호, 단계 (1 부터)
+    bool skill;         // 스킬 강화 (아직 없음) / 스탯 강화
+};   // 기차에 매달려 갈 때 줄 길이
 
 // ---------------- 전역 변수 ----------------
 extern float fadeT;                     // 방을 넘어갈 때 화면을 덮는 구멍 빛 (1 → 0)
@@ -405,7 +423,23 @@ extern glm::mat4 cubeVP;
 extern double lastMouseX, lastMouseY;
 extern bool firstMouse;
 
+extern Stats stats;
+extern std::vector<Augment> augments;
+extern std::vector<int> ownedAugments;
+extern bool augPicking;
+extern int augOffer[3], augOfferCount;
+extern const int AUG_LINE_COUNT;
+
 // ---------------- 함수 ----------------
+void initAugments();
+void resetAugments();
+int augLineTier(int line);
+const char* augLineName(int line);
+int augLineTiers(int line);
+void startAugmentPick();
+void chooseAugment(int k);
+void augmentCardRect(int i, int w, int h, float& x, float& y, float& cw, float& ch);
+int augmentCardAt(double fbX, double fbY, int w, int h);
 int styleForCell(int cell);
 const char* styleName(int style);
 glm::vec3 styleTint(int style);

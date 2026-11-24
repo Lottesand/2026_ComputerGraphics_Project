@@ -32,6 +32,60 @@ void drawTextCentered(Batch2D& b, float cx, float y, float s, const std::string&
     drawText(b, cx - textWidth(str, s) * 0.5f, y, s, str, col);
 }
 
+// 폭에 맞게 단어 단위로 줄바꿈
+static std::vector<std::string> wrapText(const std::string& s, float maxW, float scale) {
+    std::vector<std::string> lines;
+    std::string cur, word;
+    auto flush = [&]() {
+        if (word.empty()) return;
+        std::string t = cur.empty() ? word : cur + " " + word;
+        if (!cur.empty() && textWidth(t, scale) > maxW) { lines.push_back(cur); cur = word; }
+        else cur = t;
+        word.clear();
+    };
+    for (char c : s) { if (c == ' ') flush(); else word += c; }
+    flush();
+    if (!cur.empty()) lines.push_back(cur);
+    return lines;
+}
+
+// 계열 단계를 작은 칸으로: 가진 단계는 채우고 남은 단계는 빈 칸
+static void drawPips(Batch2D& b, float x, float y, float sz, int have, int total, const glm::vec4& on) {
+    for (int i = 0; i < total; ++i)
+        b.rect(x + i * sz * 1.5f, y, sz, sz, i < have ? on : glm::vec4(1, 1, 1, 0.18f));
+}
+
+// 방 클리어 후 증강 3개 중 하나 고르기 (게임은 멈춰 있다)
+static void drawAugmentPicker(Batch2D& b, int w, int h) {
+    float ui = h / 720.0f;
+    b.rect(0, 0, (float)w, (float)h, glm::vec4(0, 0, 0, 0.62f));
+    drawTextCentered(b, w * 0.5f, h * 0.8f, 3.2f * ui, "ROOM CLEAR - CHOOSE AN AUGMENT", glm::vec4(0.6f, 1.0f, 1.0f, 1.0f));
+    drawTextCentered(b, w * 0.5f, h * 0.8f - 30 * ui, 1.6f * ui, "CLICK A CARD OR PRESS 1  2  3", glm::vec4(1, 1, 1, 0.7f));
+    double mx, my;
+    int ww, wh;
+    glfwGetCursorPos(gWindow, &mx, &my);
+    glfwGetWindowSize(gWindow, &ww, &wh);
+    int hover = ww > 0 && wh > 0 ? augmentCardAt(mx * w / ww, h - my * h / wh, w, h) : -1;
+    for (int i = 0; i < augOfferCount; ++i) {
+        const Augment& a = augments[augOffer[i]];
+        float x, y, cw, ch;
+        augmentCardRect(i, w, h, x, y, cw, ch);
+        bool hv = i == hover;
+        glm::vec4 edge = hv ? glm::vec4(1.0f, 0.85f, 0.2f, 1.0f) : glm::vec4(0.3f, 0.9f, 1.0f, 0.8f);
+        float t = (hv ? 3.0f : 2.0f) * ui;
+        b.rect(x - t, y - t, cw + 2 * t, ch + 2 * t, edge);
+        b.rect(x, y, cw, ch, hv ? glm::vec4(0.12f, 0.14f, 0.2f, 0.97f) : glm::vec4(0.06f, 0.08f, 0.12f, 0.95f));
+        float pad = 14 * ui, top = y + ch - pad;
+        drawText(b, x + pad, top - 10 * ui, 1.5f * ui, "[" + std::to_string(i + 1) + "]  " + (a.skill ? "SKILL" : "STAT"), glm::vec4(1, 1, 1, 0.55f));
+        std::vector<std::string> nm = wrapText(a.name, cw - 2 * pad, 2.4f * ui);
+        float ty = top - 46 * ui;
+        for (const auto& l : nm) { drawText(b, x + pad, ty, 2.4f * ui, l, edge); ty -= 24 * ui; }
+        drawPips(b, x + pad, ty + 4 * ui, 8 * ui, a.tier, augLineTiers(a.line), edge);
+        ty -= 26 * ui;
+        for (const auto& l : wrapText(a.desc, cw - 2 * pad, 1.5f * ui)) { drawText(b, x + pad, ty, 1.5f * ui, l, glm::vec4(1, 1, 1, 0.9f)); ty -= 16 * ui; }
+    }
+}
+
 void renderHUD(int w, int h) {
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
@@ -60,7 +114,7 @@ void renderHUD(int w, int h) {
     b.rect(bx, by, bw * focusEnergy, bh, focusActive ? glm::vec4(1, 1, 1, 0.95f) : glm::vec4(cyan.r, cyan.g, cyan.b, 0.85f));
     drawTextCentered(b, cx, by + bh + 6 * ui, 1.6f * ui, "BULLET TIME [SHIFT]", glm::vec4(cyan.r, cyan.g, cyan.b, 0.8f));
 
-    for (int i = 0; i < 3; ++i)
+    for (int i = 0; i < stats.maxHp; ++i)
         b.rect((24 + i * 22) * ui, 28 * ui, 16 * ui, 16 * ui, i < player.hp ? orange : glm::vec4(0, 0, 0, 0.4f));
 
     std::string ws = currentCell == HUB_CELL ? "HUB"
@@ -88,6 +142,7 @@ void renderHUD(int w, int h) {
     }
     drawText(b, 16 * ui, h - 48 * ui, 1.4f * ui, "TAB CUBE", glm::vec4(1, 1, 1, 0.6f));
     if (rotAnimActive) drawTextCentered(b, cx, h * 0.68f, 3.0f * ui, "WORLD ROTATING", glm::vec4(1.0f, 0.85f, 0.2f, 1.0f));
+    if (augPicking) drawAugmentPicker(b, w, h);
 
     flushHUD(b, w, h);
 }
@@ -119,6 +174,19 @@ void renderCubeHUD(int w, int h) {
 
     if (cubies[currentCell].orient != worldOrient)
         drawText(b, 20 * ui, h - 48 * ui, 1.6f * ui, "YOUR WORLD WILL ROTATE", yellow);
+
+    // 지금까지 얻은 증강: 계열마다 이름 + 단계 칸 (가진 단계 / 전체 단계)
+    float px = 20 * ui, py = h - 96 * ui;
+    drawText(b, px, py, 1.9f * ui, "AUGMENTS " + std::to_string(ownedAugments.size()) + "/26", cyan);
+    py -= 26 * ui;
+    if (ownedAugments.empty()) drawText(b, px, py, 1.4f * ui, "CLEAR A ROOM TO PICK ONE", dim);
+    for (int l = 0; l < AUG_LINE_COUNT; ++l) {
+        int t = augLineTier(l);
+        if (t == 0) continue;
+        drawText(b, px, py, 1.4f * ui, augLineName(l), white);
+        drawPips(b, px + 150 * ui, py + 1 * ui, 7 * ui, t, augLineTiers(l), cyan);
+        py -= 19 * ui;
+    }
 
     flushHUD(b, w, h);
 }

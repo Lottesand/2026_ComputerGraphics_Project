@@ -91,6 +91,30 @@ void shotScript(int frame, int w, int h) {
     auto pv = [](glm::vec3 p) { return std::to_string((int)p.x) + "," + std::to_string((int)p.y) + "," + std::to_string((int)p.z); };
     static int phase = 0, t0 = 0, rideCell = -1;
     static glm::vec3 portalDir(0.0f);
+    // 방 클리어 → 증강 후보 3개(서로 다르고, 가질 수 있는 단계만)를 확인하고 첫 번째를 고른다. 바로 Tab 화면도 한 장
+    static int tabShotFrame = -1;
+    if (frame == tabShotFrame) openCubeView();
+    if (frame == tabShotFrame + 1) { shot(31); closeCubeView(); }
+    if (augPicking) {
+        static bool picShot = false;
+        if (!picShot) { shot(30); picShot = true; }
+        bool ok = augOfferCount == 3 && augOffer[0] != augOffer[1] && augOffer[1] != augOffer[2] && augOffer[0] != augOffer[2];
+        std::cout << "[test] augment offer:";
+        for (int k = 0; k < augOfferCount; ++k) {
+            const Augment& a = augments[augOffer[k]];
+            std::cout << " [" << a.name << "]";
+            ok = ok && augLineTier(a.line) == a.tier - 1;
+        }
+        int stat = 0;
+        for (const auto& a : augments) stat += !a.skill;
+        std::cout << " pool " << augments.size() << " stat " << stat << (ok ? "" : " FAIL") << "\n";
+        float before = stats.fireInterval + stats.bulletSpeed + stats.maxHp + stats.grappleRange + stats.dash + stats.jump + stats.moveMul;
+        chooseAugment(0);
+        tabShotFrame = frame + 1;
+        float after = stats.fireInterval + stats.bulletSpeed + stats.maxHp + stats.grappleRange + stats.dash + stats.jump + stats.moveMul;
+        std::cout << "[test] augment picked " << augments[ownedAugments.back()].name << " owned " << ownedAugments.size()
+                  << " paused-then-resumed " << !augPicking << " stats changed " << (before != after || stats.pierce || stats.pellets > 1 || stats.clearHeal || stats.killsPerHeal || stats.focusDrain != 0.22f || stats.focusRegen != 0.12f || stats.pump != 10.0f || stats.steer != 8.0f || stats.releasePop != 1.0f || stats.sprintMul != 1.0f) << "\n";
+    }
     if (frame == 30) { player.pitch = 0.3f; player.yaw = 0.6f; }
     if (frame == 59) {
         // 첫 장면은 가장 가까운 객차를 바라보게 한다
