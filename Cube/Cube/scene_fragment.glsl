@@ -6,6 +6,7 @@ in vec4 lsPos;
 in float viewDepth;
 in vec3 oPos;
 in vec3 oNormal;
+in vec2 fUV;
 in vec3 wRadial;
 // 재질은 정점 셰이더가 넘겨준다 (인스턴스 속성 또는 uniform). 물체 하나 안에서는 같은 값이라 flat
 flat in vec3 fColor;
@@ -14,9 +15,9 @@ flat in int fTexLayer, fPattern;
 flat in vec3 fObjScale;
 #define objColor fColor
 #define Ks fKs
-#define shininess fShin
 #define emissive fEmis
-#define pattern fPattern            // 0 단색, 1 바닥 타일, 2 콘크리트 노이즈, 3 유리 격자 벽, 4 동심원으로 솔질한 금속
+#define pattern fPattern            // 0 단색, 1 바닥 타일, 2 콘크리트 노이즈, 3 유리 격자 벽, 4 동심원으로 솔질한 금속,
+                                    // 5 텍스처 모델(열차), 6 열차 실내 불빛
 #define texLayer fTexLayer          // -1 이면 텍스처 없음
 #define texScale fTexScale          // 텍스처 한 장이 덮는 길이 (음수면 면 하나에 한 장)
 #define objScale fObjScale
@@ -42,6 +43,8 @@ uniform float pointPower;
 
 // 텍스처 매핑: 코드로 만든 이미지 배열. 물체 공간 좌표를 면 방향에 맞는 평면에 투영해 UV 로 쓴다
 uniform sampler2DArray albedoTex;
+// 모델 텍스처 (pattern 5): 색, ORM(G 거칠기, B 금속), 노멀(OpenGL 방식)
+uniform sampler2D modelColor, modelOrm, modelNormal;
 
 // 점광원(조명등, 네온) 여러 개. 카메라에서 가까운 것만 CPU 가 골라서 보낸다
 const int MAX_LIGHTS = 24;
@@ -107,6 +110,31 @@ float brushedSpec(vec3 T, vec3 L, vec3 V, vec3 N)
     return pow(max(1.0 - th * th, 0.0), 45.0) * max(dot(N, L), 0.0);
 }
 
+// 노멀맵: 탄젠트가 없으므로 화면 미분으로 접선 공간을 만든다. glTF UV 는 v 가 아래로 자라 y 를 뒤집는다
+vec3 modelNormalAt(vec3 N)
+{
+    vec3 dp1 = dFdx(wPos), dp2 = dFdy(wPos);
+    vec2 du1 = dFdx(fUV), du2 = dFdy(fUV);
+    vec3 dp2p = cross(dp2, N), dp1p = cross(N, dp1);
+    vec3 T = dp2p * du1.x + dp1p * du2.x, B = dp2p * du1.y + dp1p * du2.y;
+    float m = max(dot(T, T), dot(B, B));
+    if (m < 1e-12) return N;
+    vec3 t = texture(modelNormal, fUV).xyz * 2.0 - 1.0;
+    return normalize((T * t.x - B * t.y) / sqrt(m) + N * t.z);
+}
+
+// 열차 실내: 천장 조명 띠는 밝고 아래로 갈수록 어둡다. 손잡이 기둥과 앉은 승객의 그림자가 비친다
+float cabinGlow()
+{
+    float y = oPos.y / objScale.y + 0.5;        // 0 바닥 ~ 1 천장
+    float u = abs(oNormal.x) > 0.5 ? oPos.z : oPos.x;
+    float g = mix(0.3, 1.0, smoothstep(0.0, 0.85, y)) + 0.9 * smoothstep(0.84, 0.92, y);
+    g *= 1.0 - 0.6 * (1.0 - smoothstep(0.02, 0.035, abs(fract(u / 0.9) - 0.5) * 0.9));
+    float seat = floor(u / 0.45), hd = length(vec2((fract(u / 0.45) - 0.5) * 0.45, (y - 0.2) * objScale.y));
+    if (hash(vec2(seat, oNormal.z)) > 0.55) g *= mix(0.25, 1.0, smoothstep(0.13, 0.16, hd));
+    return g;
+}
+
 // PCF 3x3 그림자
 float shadowFactor(vec3 N, vec3 L)
 {
@@ -136,9 +164,16 @@ void main()
     vec3 L = normalize(sunDir);
     vec3 V = normalize(viewPos - wPos);
     vec3 base;
-    float specMask = 1.0;
+    float specMask = 1.0, shin = fShin, metalness = 0.0;
     bool useTex = texLayer >= 0 && style != ST_BLUEPRINT;
-    if (useTex) {
+    if (pattern == 5) {
+        vec3 orm = texture(modelOrm, fUV).rgb;
+        N = modelNormalAt(N);
+        base = texture(modelColor, fUV).rgb * objColor;
+        metalness = orm.b;
+        specMask = mix(0.35, 1.0, metalness) * (1.0 - 0.75 * orm.g);
+        shin = mix(96.0, 10.0, orm.g);
+    } else if (useTex) {
         vec3 an = abs(oNormal);
         vec2 uv = an.y > 0.5 ? oPos.xz : (an.x > 0.5 ? oPos.zy : oPos.xy);
         vec2 sz = an.y > 0.5 ? objScale.xz : (an.x > 0.5 ? objScale.zy : objScale.xy);
@@ -150,7 +185,7 @@ void main()
     } else {
         base = surface(objColor, N);
     }
-    if (style == ST_TOON) base = mix(objColor, base, 0.3) * 1.1;            // 무늬는 약하게, 색은 선명하게
+    if (style == ST_TOON && pattern != 5) base = mix(objColor, base, 0.3) * 1.1;            // 무늬는 약하게, 색은 선명하게
     if (style == ST_BLUEPRINT) base = vec3(0.75);
     float ks = Ks * specMask;
 
@@ -158,7 +193,7 @@ void main()
     float NdotL = max(dot(N, L), 0.0);
     vec3 amb = mix(groundAmb, skyAmb, N.y * 0.5 + 0.5);     // 반구 주변광
     vec3 R = reflect(-L, N);
-    float spec = NdotL > 0.0 ? pow(max(dot(V, R), 0.0), shininess) * ks : 0.0;
+    float spec = NdotL > 0.0 ? pow(max(dot(V, R), 0.0), shin) * ks : 0.0;
     float diff = NdotL * sh;
     float fres = pow(1.0 - max(dot(N, V), 0.0), 5.0);
 
@@ -172,7 +207,7 @@ void main()
         float F = f0 + (1.0 - f0) * fres;
         vec3 H = normalize(L + V);
         float nh = max(dot(N, H), 0.0);
-        spec = NdotL > 0.0 ? pow(nh, shininess * 2.0) * (shininess + 8.0) / 25.0 * F : 0.0;
+        spec = NdotL > 0.0 ? pow(nh, shin * 2.0) * (shin + 8.0) / 25.0 * F : 0.0;
         amb *= 0.85 + 0.3 * F;
     }
 
@@ -188,6 +223,11 @@ void main()
     }
     col += skyAmb * fres * ks * (style == ST_REAL ? 0.9 : 0.4);
 
+    if (pattern == 5) {      // 금속 몸체의 주변 반사 (환경맵 대신 하늘색·땅색)
+        vec3 E = reflect(-V, N);
+        col += mix(groundAmb, skyAmb, smoothstep(-0.3, 0.6, E.y)) * base * metalness * (0.5 + fres);
+    }
+
     // 점광원: Phong(확산 + 반사) + 거리 감쇠. 범위 끝에서 부드럽게 0 이 되도록
     for (int i = 0; i < numLights; ++i) {
         vec3 lv = lightPos[i] - wPos;
@@ -197,7 +237,7 @@ void main()
         float fall = clamp(1.0 - pow(d / lightRange[i], 2.0), 0.0, 1.0);
         float att = fall * fall / (1.0 + 0.05 * d * d);
         float nl = max(dot(N, Lp), 0.0);
-        float sp = nl > 0.0 ? pow(max(dot(V, reflect(-Lp, N)), 0.0), shininess) * ks : 0.0;
+        float sp = nl > 0.0 ? pow(max(dot(V, reflect(-Lp, N)), 0.0), shin) * ks : 0.0;
         if (style == ST_TOON) { nl = band(nl * att * 3.0) / max(att * 3.0, 0.001); sp = step(0.5, sp) * 0.6; }
         col += (base * nl + sp) * lightCol[i] * att;
         if (brushed) col += metal * brushedSpec(T, Lp, V, N) * lightCol[i] * att * 0.6;
@@ -211,6 +251,7 @@ void main()
     }
 
     float emis = emissive;
+    if (pattern == 6) { emis *= cabinGlow(); col *= 0.1; }
     if (style == ST_NEON) {
         // 네온: 표면은 거의 검게, 물체 공간 격자선과 발광체만 빛난다 (높이에 따라 자홍 → 청록)
         col *= 0.12;

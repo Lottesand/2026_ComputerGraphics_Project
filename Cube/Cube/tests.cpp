@@ -443,11 +443,9 @@ void shotScript(int frame, int w, int h) {
         player.vel = glm::vec3(0.0f);
         step = 20; sf = frame;
     }
-    static int arrowFrames = 0, straightFrames = 0;
-    static double arrowStart = 0.0;
-    static glm::vec3 prevDir(0.0f);
-    static float arcAngle = 0.0f, minLoop = 1e9f;   // 원 그리기 한 번에 돈 각도 (꽂기 전에 한 바퀴 다 돌았는지)
-    static int prevPhase = 0, loops = 0;
+    static int arrowFrames = 0, spreadKills = 0, rowKills = 0, curveK = 0, dashN = 0, lineN = 0;
+    static double arrowStart = 0.0, spreadT = -1.0;
+    static bool rowPlaced = false;
     if (phase == 3 && step == 20 && frame == sf + 3) {
         std::cout << "[test] arrow picked up count " << arrowCount << " pickup gone " << !arrowPickupActive << "\n";
         ck(arrowCount == 1 && !arrowPickupActive, "arrow pickup into R slot");
@@ -460,31 +458,30 @@ void shotScript(int frame, int w, int h) {
         useArrow();
         ck(arrow.active && arrowCount == 0, "R uses arrow");
         arrowStart = glfwGetTime();
-        arrowFrames = straightFrames = 0;
-        prevDir = arrow.dir;
-        arcAngle = 0.0f; minLoop = 1e9f; prevPhase = 0; loops = 0;
         step = 21; sf = frame;
     }
     if (phase == 3 && step == 21) {
         if (arrow.active) {
-            // 원 그리기(방향이 계속 바뀜)와 일직선 돌진(방향 고정)이 둘 다 나와야 한다
-            ++arrowFrames;
-            if (arrow.phase == 1 && glm::dot(prevDir, arrow.dir) > 0.99999f) ++straightFrames;
-            if (arrow.phase == 0) arcAngle += acosf(glm::clamp(glm::dot(prevDir, arrow.dir), -1.0f, 1.0f));
-            if (prevPhase == 0 && arrow.phase == 1) { minLoop = std::min(minLoop, arcAngle); ++loops; arcAngle = 0.0f; }
-            if (arrow.phase == 0 && prevPhase == 1) arcAngle = 0.0f;
-            prevPhase = arrow.phase;
-            prevDir = arrow.dir;
-            if (arrowFrames == 60) { aimAt(arrow.pos); shot(46); }
+            if (++arrowFrames == 12) { aimAt(arrow.pos); shot(46); }
+            curveK = arrow.curveKills; dashN = arrow.dashes; lineN = arrow.maxLine;
+            spreadKills = std::max(spreadKills, rowPlaced ? 0 : kills - killsAt);
+            if (!rowPlaced && kills - killsAt >= 6) {
+                // 흩어진 적을 다 잡았으면 비슷하게 일렬로 선 적 5명 → 직선으로 한 번에
+                spreadT = glfwGetTime() - arrowStart;
+                rowPlaced = true;
+                arrow.maxLine = 0;
+                rowKills = kills;
+                for (int k = 0; k < 5; ++k) addEnemy(glm::vec3(-12.0f + 6.0f * k, 0, 10.0f + (k % 2 ? 0.4f : -0.4f)));
+            }
         }
         if (!arrow.active || timedOut(3000, "arrow ends")) {
             double dur = glfwGetTime() - arrowStart;
-            int movers = 0;
-            for (const auto& e : enemies) movers += e.alive && e.rusher;
-            std::cout << "[test] arrow loops before dash " << loops << " smallest loop " << minLoop * 180.0f / PI << " deg\n";
-            ck(loops > 0 && minLoop > 6.0f, "full circle before each dash");
-            std::cout << "[test] arrow flew " << dur << "s kills " << kills - killsAt << "/6 (moving left " << movers << ") straight dash frames " << straightFrames << "/" << arrowFrames << "\n";
-            ck(dur > 4.0 && dur < 6.5 && kills - killsAt >= 5 && movers == 0 && straightFrames > 0 && straightFrames < arrowFrames, "arrow arcs, locks, dashes, hits moving enemies");
+            std::cout << "[test] arrow flew " << dur << "s spread " << spreadKills << "/6 in " << spreadT << "s, row kills " << kills - rowKills
+                      << " curve kills " << curveK << " dashes " << dashN << " max in one line " << lineN << "\n";
+            ck(dur > 4.0 && dur < 6.5, "arrow lasts 5s");
+            ck(spreadT > 0.0 && spreadT < 2.0, "arrow clears spread enemies fast");
+            ck(rowPlaced && kills - rowKills >= 5 && lineN >= 3 && dashN > 0, "arrow pierces a row in a straight dash");
+            ck(curveK > 0, "arrow curves through spread enemies");
             std::cout << "[test] arrow: " << (capFail ? "FAIL" : "ok") << "\n";
             step = 22; sf = frame;
         }

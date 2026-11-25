@@ -472,10 +472,13 @@ extern const float E_COOLDOWN, Q_COOLDOWN;
 struct Arrow {
     bool active = false;
     float t = 0.0f;                 // 남은 시간
-    glm::vec3 pos{ 0.0f }, dir{ 0, 0, -1 }, curlAxis{ 0, 1, 0 };
-    int kills = 0;
-    int phase = 0;                  // 0 원 그리기, 1 표적으로 일직선 돌진
-    float phaseT = 0.0f, dashLeft = 0.0f;
+    glm::vec3 pos{ 0.0f }, dir{ 0, 0, -1 };
+    int kills = 0, curveKills = 0, dashes = 0, maxLine = 0;   // 휘며 맞힌 수, 직선 관통 횟수, 한 직선에 꿴 최대 수
+    int phase = 0;                  // 0 휘어 날기, 1 일직선 관통
+    bool idle = false;              // 적이 없어 제자리에서 떠는 중
+    float curveT = 0.0f, dashLeft = 0.0f;   // 못 맞히고 휜 시간, 남은 직선 거리
+    int rowN = 1;                   // 노리는 줄에 선 적 수와 줄 끝 적의 자리
+    glm::vec3 rowPos{ 0.0f };
     std::vector<glm::vec3> trail;   // 꼬리 (최근 위치, 앞이 최신)
 };
 extern int arrowCount;
@@ -640,6 +643,12 @@ glm::mat4 orientTo(glm::vec3 dir);
 void drawEnemy(const Enemy& e);
 void drawPart(const glm::mat4& m, const Material& mat);
 void drawTrains();
+// 열차 모델 (trainmodel.cpp)
+extern bool useTrainModel;
+void createTrainModel();
+bool trainModelOn();
+void bindTrainTextures();
+void drawTrainCar(const glm::mat4& C, bool first, bool last);
 void drawPortals(bool films);
 void drawWorld(bool withEffects);
 void uploadLights(glm::vec3 eye);

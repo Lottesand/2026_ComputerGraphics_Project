@@ -208,6 +208,7 @@ void drawTrains() {
         for (int i = 0; i < t.cars; ++i) {
             if (!carVisible(t, carS(t, i))) continue;
             glm::mat4 C = carWorld(k, i);
+            if (trainModelOn()) { drawTrainCar(C, i == 0, i == t.cars - 1); continue; }
             drawPart(C * glm::scale(glm::mat4(1.0f), glm::vec3(CAR_LEN, CAR_H, CAR_W)), body);
             drawPart(C * TRS({ 0, -CAR_H * 0.5f + 0.3f, 0 }, { CAR_LEN * 0.99f, 0.6f, CAR_W + 0.03f }), dark);
             drawPart(C * TRS({ 0, CAR_H * 0.5f + 0.06f, 0 }, { CAR_LEN * 0.95f, 0.12f, CAR_W * 0.7f }), dark);
@@ -287,7 +288,13 @@ void drawYonduArrow() {
                        glm::rotate(glm::mat4(1.0f), 0.5f, glm::vec3(1, 0, 0)), 3.0f);
     }
     if (!arrow.active || shadowPass) return;
-    drawArrowModel(glm::translate(glm::mat4(1.0f), arrow.pos) * orientTo(arrow.dir), 6.0f);
+    glm::mat4 A = glm::translate(glm::mat4(1.0f), arrow.pos) * orientTo(arrow.dir);
+    if (arrow.idle) {       // 제자리 떨림: 주기가 다른 빠른 진동을 섞어 위치와 각도를 조금씩 흔든다
+        float t = globalTime;
+        A = A * glm::translate(glm::mat4(1.0f), glm::vec3(sinf(t * 83.0f), sinf(t * 97.0f + 1.0f), sinf(t * 71.0f + 2.0f)) * 0.035f) *
+            glm::rotate(glm::mat4(1.0f), 0.06f * sinf(t * 89.0f), glm::vec3(1, 0, 0)) * glm::rotate(glm::mat4(1.0f), 0.06f * sinf(t * 103.0f), glm::vec3(0, 1, 0));
+    }
+    drawArrowModel(A, 6.0f);
     for (size_t i = 0; i + 1 < arrow.trail.size(); ++i) {
         glm::vec3 a = arrow.trail[i], b = arrow.trail[i + 1], d = a - b;
         float L = glm::length(d);
@@ -384,8 +391,14 @@ void uploadLights(glm::vec3 eye) {
     for (const auto& l : localLights) cand.push_back({ glm::vec3(W * glm::vec4(l.pos, 1.0f)), l.col, l.range });
     for (int k = 0; k < (int)tracks.size(); ++k)
         for (int i = 0; i < tracks[k].cars; ++i)
-            if (carVisible(tracks[k], carS(tracks[k], i)))
-                cand.push_back({ glm::vec3(carWorld(k, i)[3]), glm::vec3(1.0f, 0.72f, 0.42f) * 1.6f, 10.0f });
+            if (carVisible(tracks[k], carS(tracks[k], i))) {
+                glm::mat4 C = carWorld(k, i);
+                cand.push_back({ glm::vec3(C[3]), glm::vec3(1.0f, 0.72f, 0.42f) * 1.6f, 10.0f });
+                if (!trainModelOn()) continue;
+                // 전조등(앞 선로를 비춤)과 후미등
+                if (i == 0) cand.push_back({ glm::vec3(C * glm::vec4(CAR_LEN * 0.5f + 1.8f, -0.4f, 0, 1)), glm::vec3(1.0f, 0.93f, 0.78f) * 3.0f, 13.0f });
+                if (i == tracks[k].cars - 1) cand.push_back({ glm::vec3(C * glm::vec4(-CAR_LEN * 0.5f - 0.9f, -0.4f, 0, 1)), glm::vec3(1.0f, 0.12f, 0.07f) * 2.0f, 7.0f });
+            }
     if (arrow.active) cand.push_back({ arrow.pos, glm::vec3(1.0f, 0.15f, 0.08f) * 3.0f, 9.0f });
     if (arrowPickupActive) cand.push_back({ arrowPickupPos + glm::vec3(0, 1.0f, 0), glm::vec3(1.0f, 0.15f, 0.08f) * 2.0f, 6.0f });
     if (encounterPlaced) cand.push_back({ encounterPos + glm::vec3(0, 1.6f, 0), glm::vec3(1.0f, 0.25f, 0.9f) * 3.0f, 11.0f });
@@ -591,6 +604,7 @@ void renderFrame(int w, int h) {
     glBindTexture(GL_TEXTURE_2D_ARRAY, albedoArray);
     glUniform1i(sl.albedoTex, 1);
     glActiveTexture(GL_TEXTURE0);
+    bindTrainTextures();
     uploadLights(eye);
     glUniform1i(sl.style, styleForCell(currentCell));
     batching = true;

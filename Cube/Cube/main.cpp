@@ -31,6 +31,7 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
         else useArrow();
     }
     else if (key == GLFW_KEY_2 && (mods & GLFW_MOD_SHIFT)) debugGiveArrow();     // 디버그: 욘두 화살 +1
+    else if (key == GLFW_KEY_3 && (mods & GLFW_MOD_SHIFT)) useTrainModel = !useTrainModel;     // 디버그: 열차 모델 ↔ 상자 열차
     else if (key == GLFW_KEY_F) tryInteract();
     else if (key == GLFW_KEY_1 && (mods & GLFW_MOD_SHIFT)) debugGiveItem(ITEM_CAPTAIN);   // 디버그: 캡틴 방패 지급
     else if (key == GLFW_KEY_C) cKeyDown();
@@ -183,6 +184,7 @@ int main(int argc, char** argv) {
     createShadowMap();
     double texT0 = glfwGetTime();
     createTextures();
+    createTrainModel();
     std::cout << "[info] textures " << TEX_COUNT << " x " << TEX_SIZE << "^2 generated in " << (int)((glfwGetTime() - texT0) * 1000) << " ms\n"
               << "[info] GPU " << (const char*)glGetString(GL_RENDERER) << " / GL " << (const char*)glGetString(GL_VERSION) << "\n";
     cubeViewQ = glm::angleAxis(0.5f, glm::vec3(1, 0, 0)) * glm::angleAxis(-0.6f, glm::vec3(0, 1, 0));
