@@ -168,7 +168,7 @@ int main(int argc, char** argv) {
     tetraMesh = buildTetra();
     createInstancing();
     diskMesh = buildDisk(48);
-    starMesh = buildStar();
+    buildCapShield();
     glGenVertexArrays(1, &emptyVao);
     glGenVertexArrays(1, &hudVao);
     glGenBuffers(1, &hudVbo);

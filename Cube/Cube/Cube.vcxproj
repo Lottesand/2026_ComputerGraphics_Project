@@ -157,6 +157,7 @@
     <ClCompile Include="game.cpp" />
     <ClCompile Include="cubeview.cpp" />
     <ClCompile Include="render.cpp" />
+    <ClCompile Include="shield.cpp" />
     <ClCompile Include="hud.cpp" />
     <ClCompile Include="tests.cpp" />
   </ItemGroup>

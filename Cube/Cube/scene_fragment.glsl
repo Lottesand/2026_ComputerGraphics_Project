@@ -6,6 +6,7 @@ in vec4 lsPos;
 in float viewDepth;
 in vec3 oPos;
 in vec3 oNormal;
+in vec3 wRadial;
 // 재질은 정점 셰이더가 넘겨준다 (인스턴스 속성 또는 uniform). 물체 하나 안에서는 같은 값이라 flat
 flat in vec3 fColor;
 flat in float fKs, fShin, fEmis, fTexScale;
@@ -15,7 +16,7 @@ flat in vec3 fObjScale;
 #define Ks fKs
 #define shininess fShin
 #define emissive fEmis
-#define pattern fPattern            // 0 단색, 1 바닥 타일, 2 콘크리트 노이즈, 3 유리 격자 벽
+#define pattern fPattern            // 0 단색, 1 바닥 타일, 2 콘크리트 노이즈, 3 유리 격자 벽, 4 동심원으로 솔질한 금속
 #define texLayer fTexLayer          // -1 이면 텍스처 없음
 #define texScale fTexScale          // 텍스처 한 장이 덮는 길이 (음수면 면 하나에 한 장)
 #define objScale fObjScale
@@ -88,7 +89,22 @@ vec3 surface(vec3 base, vec3 N)
         vec3 glass = base * pane;
         return mix(glass, vec3(0.16, 0.17, 0.2), max(mullion, big));
     }
+    if (pattern == 4) {
+        // 동심원 결과 옅은 얼룩. 멀어서 결이 픽셀보다 가늘어지면 지운다 (깜빡임 방지)
+        vec2 q = oPos.xy / objScale.xy;
+        float r = length(q) * 150.0;
+        float fade = clamp(1.0 - fwidth(r), 0.0, 1.0);
+        float ring = (noise(vec2(r, 0.5)) - 0.5) * 0.22 * fade;
+        return base * (1.0 + ring - noise(q * 6.0) * 0.1);
+    }
     return base;
+}
+
+// 솔질한 금속의 이방성 반사: 결 방향 T 와 하프 벡터가 수직일수록 밝다 → 부채꼴로 퍼지는 하이라이트
+float brushedSpec(vec3 T, vec3 L, vec3 V, vec3 N)
+{
+    float th = dot(T, normalize(L + V));
+    return pow(max(1.0 - th * th, 0.0), 45.0) * max(dot(N, L), 0.0);
 }
 
 // PCF 3x3 그림자
@@ -161,6 +177,15 @@ void main()
     }
 
     vec3 col = base * (amb + sunColor * diff) + sunColor * spec * sh;
+    // 툰·청사진은 단순한 명암을 유지하려고 금속 반사를 뺀다
+    bool brushed = pattern == 4 && style != ST_TOON && style != ST_BLUEPRINT && dot(wRadial, wRadial) > 1e-8;
+    vec3 T = vec3(0.0), metal = mix(base, vec3(1.0), 0.25);
+    if (brushed) {
+        T = normalize(cross(N, wRadial));
+        col += sunColor * metal * brushedSpec(T, L, V, N) * sh * 0.8;
+        vec3 E = reflect(-V, N);        // 주변 반사: 위는 하늘색, 아래는 땅색
+        col += mix(groundAmb, skyAmb, smoothstep(-0.2, 0.5, E.y)) * metal * (0.25 + 0.5 * fres);
+    }
     col += skyAmb * fres * ks * (style == ST_REAL ? 0.9 : 0.4);
 
     // 점광원: Phong(확산 + 반사) + 거리 감쇠. 범위 끝에서 부드럽게 0 이 되도록
@@ -175,6 +200,7 @@ void main()
         float sp = nl > 0.0 ? pow(max(dot(V, reflect(-Lp, N)), 0.0), shininess) * ks : 0.0;
         if (style == ST_TOON) { nl = band(nl * att * 3.0) / max(att * 3.0, 0.001); sp = step(0.5, sp) * 0.6; }
         col += (base * nl + sp) * lightCol[i] * att;
+        if (brushed) col += metal * brushedSpec(T, Lp, V, N) * lightCol[i] * att * 0.6;
     }
 
     if (pointPower > 0.0) {
@@ -192,6 +218,7 @@ void main()
         vec2 q = an.y > 0.5 ? oPos.xz : (an.x > 0.5 ? oPos.zy : oPos.xy);
         vec2 g = abs(fract(q / 2.0) - 0.5);
         float line = smoothstep(0.46, 0.49, max(g.x, g.y));
+        if (pattern == 4) line = smoothstep(0.95, 0.97, length(oPos.xy / objScale.xy));   // 방패는 테두리만 빛난다
         vec3 neon = mix(vec3(1.0, 0.15, 0.85), vec3(0.1, 0.95, 1.0), clamp(wPos.y / 40.0, 0.0, 1.0));
         col += neon * line * 1.4;
         emis *= 2.5;

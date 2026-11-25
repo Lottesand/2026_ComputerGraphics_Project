@@ -467,7 +467,6 @@ extern glm::vec2 wheelVec;
 extern CapState cap;
 extern const int GUARD_MAX;
 extern const float E_COOLDOWN, Q_COOLDOWN;
-extern Mesh starMesh;
 
 // 욘두 화살 (R 칸 소모품)
 struct Arrow {
@@ -519,7 +518,7 @@ void updateShield(float dt);
 void updateCaptain(float dt);
 void onEnterRoomTransform();
 void damageEnemy(Enemy& e, float dmg, glm::vec3 hitDir);
-Mesh buildStar();
+void buildCapShield();
 void drawCapShield(const glm::mat4& M);
 void resetItems();
 void onEnterRoomItems();

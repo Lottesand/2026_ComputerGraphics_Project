@@ -34,6 +34,7 @@ out vec4 lsPos;
 out float viewDepth;
 out vec3 oPos;              // 물체 공간 좌표(크기 반영) → 텍스처 좌표. 물체와 함께 움직이고 회전한다
 out vec3 oNormal;
+out vec3 wRadial;           // 물체 Z 축에서 멀어지는 방향 (솔질한 금속의 결 방향 계산용)
 flat out vec3 fColor;
 flat out float fKs, fShin, fEmis, fTexScale;
 flat out int fTexLayer, fPattern;
@@ -73,6 +74,7 @@ void main()
     lsPos = lightVP * w;
     oPos = vPos * fObjScale;
     oNormal = vNormal;
+    wRadial = mat3(M) * vec3(vPos.xy, 0.0);
     vec4 v = view * w;
     viewDepth = -v.z;
     gl_Position = proj * v;

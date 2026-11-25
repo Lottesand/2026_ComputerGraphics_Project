@@ -252,27 +252,6 @@ void drawPortals(bool films) {
     }
 }
 
-// 캡틴 아메리카 방패: 바깥부터 빨강, 흰색, 빨강 고리, 파란 원, 흰 별. 지역 +Z 가 앞면, 반지름 1
-void drawCapShield(const glm::mat4& M) {
-    Material red{ glm::vec3(0.72f, 0.06f, 0.08f), 0.7f, 56.0f, 0.0f, 0 };
-    Material white{ glm::vec3(0.92f, 0.92f, 0.95f), 0.7f, 56.0f, 0.0f, 0 };
-    Material blue{ glm::vec3(0.06f, 0.14f, 0.52f), 0.7f, 56.0f, 0.0f, 0 };
-    Material steel{ glm::vec3(0.62f, 0.64f, 0.68f), 0.9f, 72.0f, 0.0f, 0 };
-    Material strap{ glm::vec3(0.28f, 0.16f, 0.08f), 0.1f, 8.0f, 0.0f, 0 };
-    auto disk = [&](float r, float z, const Material& m) {
-        drawMesh(diskMesh, M * glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, z)) * glm::scale(glm::mat4(1.0f), glm::vec3(r, r, 1.0f)), m);
-    };
-    // 뒷면(금속, -Z 를 향함)과 손잡이 끈 두 줄
-    drawMesh(diskMesh, M * glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, -0.03f)) * glm::rotate(glm::mat4(1.0f), PI, glm::vec3(0, 1, 0)) *
-                       glm::scale(glm::mat4(1.0f), glm::vec3(1.02f, 1.02f, 1.0f)), steel);
-    for (int s = -1; s <= 1; s += 2) drawMesh(cubeMesh, M * TRS({ 0, s * 0.16f, -0.07f }, { 0.75f, 0.09f, 0.06f }), strap);
-    disk(1.0f, 0.0f, red);
-    disk(0.8f, 0.006f, white);
-    disk(0.6f, 0.012f, red);
-    disk(0.4f, 0.018f, blue);
-    drawMesh(starMesh, M * glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, 0.024f)) * glm::scale(glm::mat4(1.0f), glm::vec3(0.38f, 0.38f, 1.0f)), white);
-}
-
 // 이상 현상(변신 아이템): 검은 핵이 돌고 자홍색 조각이 맴돌며, 멀리서도 보이게 빛기둥
 void drawEncounterItem() {
     if (!encounterPlaced) return;
